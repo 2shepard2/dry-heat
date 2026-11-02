@@ -4,7 +4,7 @@ Gritty, grounded isometric survival sim. Phoenix-area suburb, July, the grid is 
 You keep a family of four alive: personal care, inventory, relationships, base building.
 No magic, no zombies.
 
-**Status: grey box (build 1).** Tests the camera, heat/water/body sim, family control, and searching.
+**Status: grey box (build 2).** Tests the camera, heat/water/body sim, family control, and searching.
 
 - Plain ES modules + Three.js r187 (vendored in `vendor/three`, MIT). No build step.
 - Placeholder character: `assets/models/Xbot.glb` from the three.js examples (Mixamo-derived).
@@ -38,3 +38,7 @@ No magic, no zombies.
   (metabolism + environment − sweat/wet cloth) over body heat capacity. Kids are small: they overheat and
   dry out roughly 3× faster. Heat stroke (≥104.5°F) collapses someone until others cool them below 102.5°F.
   `tools/smoke.mjs` prints the calibration timelines.
+- **You play the parents** (build 2, Daniel). Jess and Theo run on `Member.think()`: Theo follows a parent
+  (into danger too), gets scared alone and goes looking; Jess stays put, drinks/sleeps on her own, refuses
+  orders when miserable. Parents give orders within earshot (`Member.order`). Helpers (`assist` task) speed
+  up searching and carrying; the mattress move is a whole-family job (`game.startJob`).

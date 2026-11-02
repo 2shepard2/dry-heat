@@ -20,6 +20,7 @@ export class UI {
       const c = e.target.closest('.card');
       if (!c) return;
       const m = game.family.find((x) => x.id === c.dataset.id);
+      if (m.ai) { game.memberMenu(m, e.clientX + 12, e.clientY); return; }
       if (game.selected.length === 1 && game.selected[0] === m && !e.shiftKey) game.focusOn(m);
       else game.selectById(c.dataset.id, e.shiftKey);
       this.refresh();
@@ -104,7 +105,7 @@ export class UI {
       if (r) g.itemMenu(m, Number(r.dataset.i), ev.clientX, ev.clientY);
     };
 
-    const open = g.open && g.open.member === m ? g.open.obj : null;
+    const open = g.opens.get(m) || null;
     if (!open) { set(cont, ''); return; }
     set(cont, `<h3>${esc(open.name)}${open.home ? '' : ' <span class="warn">(not yours)</span>'}
       ${open.items.length ? '<button id="takeall">Take all</button>' : ''}</h3>` +

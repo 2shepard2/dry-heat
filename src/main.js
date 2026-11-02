@@ -81,7 +81,7 @@ function updateLight() {
 // ---------------------------------------------------------------- game object
 const rng = makeRng(Date.now() >>> 0);
 const game = {
-  scene, map, sim, ITEMS, family: [], selected: [], open: null, over: false, frames: 0,
+  scene, map, sim, ITEMS, family: [], selected: [], opens: new Map(), over: false, frames: 0,
   objectives: [
     { id: 'tub', text: 'Fill the bathtub while the taps still run' },
     { id: 'look', text: 'Search the house for supplies' },
@@ -110,7 +110,7 @@ const game = {
     }
     game.openContainer(m, o);
   },
-  openContainer(m, o) { game.open = { member: m, obj: o }; if (!game.selected.length) select(m, false); },
+  openContainer(m, o) { game.opens.set(m, o); },
 
   fillContainers(m) {
     let filled = 0;
@@ -156,7 +156,8 @@ const game = {
       const ok = game.near(m, o);
       items.push({ label: `Hand to ${o.name}`, hint: ok ? '' : 'too far away', disabled: !ok || o.collapsed, fn: () => game.give(m, at(), o) });
     }
-    if (game.open && game.open.member === m) items.push({ label: `Put in ${game.open.obj.name.toLowerCase()}`, fn: () => game.put(m, game.open.obj, at()) });
+    const opened = game.opens.get(m);
+    if (opened) items.push({ label: `Put in ${opened.name.toLowerCase()}`, fn: () => game.put(m, opened, at()) });
     ui.menu(x, y, items, label(e, sim));
   },
 
@@ -257,13 +258,44 @@ const game = {
     const q = [[sx, sy]];
     while (q.length) {
       const [x, y] = q.shift();
-      if (map.walkable(x, y) && map.isIndoor(x, y)) return [x, y];
+      if (map.walkable(x, y) && map.isIndoor(x, y) && map.get(x, y) !== 4 && map.get(x, y) !== 12) return [x, y];
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const nx = x + dx, ny = y + dy, k = ny * map.W + nx;
         if (!seen.has(k) && map.walkable(nx, ny)) { seen.add(k); q.push([nx, ny]); }
       }
     }
     return null;
+  },
+  inEarshot(a, b) {
+    const ha = map.houseOf(...a.cell()), hb = map.houseOf(...b.cell());
+    return a.pos.distanceTo(b.pos) <= 9 || (ha >= 0 && ha === hb);
+  },
+  memberMenu: (v, x, y) => memberMenu(v, x, y),
+  freeBed(m) {
+    const taken = new Set(game.family.filter((x) => x !== m && x.asleep && x.bed).map((x) => x.bed));
+    const beds = map.objects.filter((o) => o.kind === 'bed' && o.home && !taken.has(o));
+    return beds.sort((a, b) => Math.hypot(a.x - m.pos.x, a.y - m.pos.z) - Math.hypot(b.x - m.pos.x, b.y - m.pos.z))[0];
+  },
+  startJob(lead, job) {
+    const [ax, ay] = job.anchor;
+    if (!lead.moveTo(ax, ay, { type: 'job', job })) { game.log(`${lead.name} can't get there.`, 'warn'); return; }
+    for (const m of job.crew) if (m !== lead) m.order('help', lead);
+    game.log(`${lead.name}: "Everybody, come help me with the mattresses."`);
+  },
+  moveMattresses() {
+    game.mattressesMoved = true;
+    const spots = [[31, 12], [32, 12], [31, 13], [32, 13]];
+    const mat = new THREE.MeshLambertMaterial({ color: 0x8a96a3 });
+    for (const [x, y] of spots) {
+      const i = map.idx(x, y);
+      const o = { id: map.objects.length, kind: 'bed', name: 'Mattress on the floor', x, y, w: 1, h: 1, lot: map.lots.indexOf(map.home), home: true, floor: map.type[i], together: true, items: [] };
+      map.type[i] = 13; map.objAt[i] = o.id; map.objects.push(o);
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.22, 0.96).translate(x + 0.5, 0.11, y + 0.5), mat);
+      mesh.castShadow = true; mesh.receiveShadow = true; mesh.userData.obj = o; o.mesh = mesh;
+      scene.add(mesh); world.pickables.push(mesh);
+    }
+    for (const o of map.objects) if (o.kind === 'bed' && o.home && !o.together && o.mesh) { o.mesh.scale.y = 0.35; o.name = 'Bare bed frame'; o.kind = 'frame'; }
+    game.log('The mattresses are on the living room floor, away from the west wall. Everyone sleeps in one room now.', 'good');
   },
   alarmT: 0,
   alarm() { game.alarmT = 3; },
@@ -297,6 +329,7 @@ marker.userData.t = 0;
 scene.add(marker);
 function select(m, add) {
   if (m.dead) return;
+  if (m.ai) return; // kids aren't steered; click them for commands instead
   if (add) {
     game.selected = game.selected.includes(m) ? game.selected.filter((x) => x !== m) : [...game.selected, m];
   } else game.selected = [m];
@@ -313,7 +346,7 @@ function commandMove(x, y) {
     const [sx, sy] = spots[k % spots.length];
     if (!m.moveTo(sx, sy)) game.log(`${m.name} can't find a way there.`, 'warn');
   });
-  if (game.open && group.includes(game.open.member)) game.open = null;
+  for (const m of group) game.opens.delete(m);
 }
 
 function objectMenu(o, cx, cy) {
@@ -339,6 +372,15 @@ function objectMenu(o, cx, cy) {
     } else items.push({ label: 'Bone dry. Whoever lived here didn\'t think to fill it.', disabled: true });
   } else if (o.kind === 'bed') {
     for (const m of group) items.push({ label: `Sleep (${m.name})`, hint: sim.indoor > 92 ? 'it\'s stifling in here' : '', fn: () => m.useObject(o, 'sleep') });
+    if (o.home && !game.mattressesMoved) {
+      const crew = game.family.filter((m) => !m.dead);
+      const able = crew.every((m) => m.canAct());
+      items.push({ label: `Everyone: drag the mattresses into the living room`, hint: able ? 'needs all of you · cooler, and together' : 'not while someone is down',
+        disabled: !able, fn: () => game.startJob(lead, {
+          label: 'Moving mattresses', dur: 15, crew, anchor: [31, 11],
+          done: () => game.moveMattresses(),
+        }) });
+    }
   }
   for (const it of items) { const f = it.fn; if (f) it.fn = () => { const who = game.selected.find((m) => m.canAct()); if (!who || who.willObey()) f(); }; }
   ui.menu(cx, cy, items, o.name + (o.home || o.lot < 0 ? '' : ` · ${map.lots[o.lot].name}`));
@@ -346,12 +388,35 @@ function objectMenu(o, cx, cy) {
 
 function memberMenu(v, cx, cy) {
   const helpers = game.selected.filter((m) => m !== v && m.canAct());
-  const items = [{ label: `Select ${v.name}`, disabled: v.dead, fn: () => select(v, false) }];
+  const items = v.ai ? [] : [{ label: `Select ${v.name}`, disabled: v.dead, fn: () => select(v, false) }];
+  const boss = helpers[0];
+  if (v.ai && !v.dead && !v.collapsed) {
+    if (!boss) items.push({ label: 'Select Marcus or Elena to tell the kids what to do.', disabled: true });
+    else {
+      const hear = game.inEarshot(boss, v);
+      const say = (label, type, extra = {}) => items.push({ label: `${boss.name}: "${label}"`, disabled: !hear || extra.disabled, hint: !hear ? `${v.name} can't hear you from here` : extra.hint || '', fn: () => v.order(type, boss) });
+      say(v.mode.type === 'follow' && v.mode.who === boss.id ? 'Stay with me." (already)' : 'Stay with me."', 'follow');
+      say('Wait here."', 'stay');
+      say('Help me."', 'help', { disabled: !boss.task && !boss.goal, hint: !boss.task && !boss.goal ? `${boss.name} isn't doing anything` : 'works faster together' });
+      say('Go get a drink from the tub."', 'drink', { disabled: game.sim.tubL < 0.5 });
+      say('Go lie down."', 'rest');
+      for (const e of v.inv) {
+        const near = game.near(boss, v);
+        items.push({ label: `Take ${label(e, sim)} from ${v.name}`, disabled: !near, hint: near ? '' : 'too far away', fn: () => { const i = v.inv.indexOf(e); if (i >= 0 && game.near(boss, v)) game.moveEntry(v.inv, i, boss.inv, true, boss.cap, boss.name); } });
+      }
+    }
+  }
+  if (!v.ai && !v.dead && !v.collapsed && boss && boss !== v) {
+    items.push({ label: `Ask ${v.name} to help ${boss.name}`, disabled: !boss.task && !boss.goal, hint: !boss.task && !boss.goal ? `${boss.name} isn't doing anything` : '', fn: () => v.order('help', boss) });
+  }
   for (const h of helpers) {
     items.push({ label: `${h.name}: pour water over ${v.name}`, hint: 'carried water, or the tub if close', disabled: v.dead, fn: () => h.tend(v, 'douse') });
-    if (v.collapsed) items.push({ label: `${h.name}: drag ${v.name} into the shade`, disabled: v.dead || h.mass < v.mass * 0.55, hint: h.mass < v.mass * 0.55 ? 'too heavy' : '', fn: () => h.tend(v, 'drag') });
+    if (v.collapsed) {
+      items.push({ label: `${h.name}: drag ${v.name} into the shade`, disabled: v.dead, hint: h.mass < v.mass * 0.55 ? 'too heavy alone: tell someone to help first' : 'faster with a helper', fn: () => h.tend(v, 'drag') });
+    }
   }
-  ui.menu(cx, cy, items, `${v.name}: ${v.status()[0]}`);
+  if (!items.length) return;
+  ui.menu(cx, cy, items, `${v.name}: ${v.status()[0]}${v.ai ? ` · ${v.doing() || 'idle'}` : ''}`);
 }
 
 // ---------------------------------------------------------------- input
@@ -386,7 +451,7 @@ renderer.domElement.addEventListener('pointerdown', (ev) => {
   if (ev.button !== 0) return;
   if (p.member) {
     const helpers = game.selected.filter((m) => m !== p.member && m.canAct());
-    if ((p.member.collapsed || p.member.dead) && helpers.length) memberMenu(p.member, ev.clientX, ev.clientY);
+    if (p.member.ai || ((p.member.collapsed || p.member.dead) && helpers.length)) memberMenu(p.member, ev.clientX, ev.clientY);
     else select(p.member, ev.shiftKey);
   } else if (p.obj) objectMenu(p.obj, ev.clientX, ev.clientY);
   else if (p.cell && game.selected.length && !game.hintedMove) { game.hintedMove = true; game.log('To walk: right-click (two-finger tap) where you want them to go.'); }
@@ -412,15 +477,15 @@ addEventListener('keydown', (e) => {
   if (k === 'r') { roofsOff = !roofsOff; }
   if (k === 'tab') {
     e.preventDefault();
-    const alive = game.family.filter((m) => !m.dead);
+    const alive = game.family.filter((m) => !m.dead && !m.ai);
     const i = alive.indexOf(game.selected[0]);
     const m = alive[(i + 1) % alive.length];
     if (m) { select(m, false); game.focusOn(m); }
   }
-  if (k === 'a' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); game.selected = game.family.filter((m) => !m.dead); }
+  if (k === 'a' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); game.selected = game.family.filter((m) => !m.dead && !m.ai); }
   if (k === 'z') for (const m of game.selected) if (m.canAct()) { m.stopTask(true); m.goal = { type: 'sleep', obj: null }; m.startTask(); }
   if (k === 'f') game.focusOn(game.selected[0]);
-  if (k === 'escape') { ui.hideMenu(); game.open = null; }
+  if (k === 'escape') { ui.hideMenu(); for (const m of game.selected) game.opens.delete(m); }
   if (k === '+' || k === '=') { cam.zoom = Math.min(4.5, cam.zoom * 1.15); placeCamera(); }
   if (k === '-') { cam.zoom = Math.max(0.7, cam.zoom / 1.15); placeCamera(); }
 });
@@ -494,10 +559,9 @@ function frame(now) {
     const pulse = 0.55 + 0.45 * Math.sin(now / (worst >= 1 ? 220 : 500));
     $('#danger').style.opacity = started ? String(Math.min(1, worst * pulse + game.alarmT * 0.3)) : '0';
   }
-  if (game.open) {
-    const { member: m, obj: o } = game.open;
+  for (const [m, o] of game.opens) {
     const d = Math.min(...map.objCells(o).map(([x, y]) => Math.hypot(x + 0.5 - m.pos.x, y + 0.5 - m.pos.z)));
-    if (d > 1.9 || m.dead) game.open = null;
+    if (d > 1.9 || !m.canAct()) game.opens.delete(m);
   }
 
   updateLight();

@@ -52,7 +52,7 @@ const state = await page.evaluate(() => {
   return {
     clock: g.sim.clock(), tub: Math.round(g.sim.tubL), frames: g.frames,
     fridge: g.map.objects.find((o) => o.home && o.ch === 'F').items.length,
-    open: !!g.open, fam: g.family.map((m) => `${m.name}:${m.status()[0]}:${Math.round(m.needs.hydration)}:${m.bodyT.toFixed(1)}`),
+    opens: g.opens.size, theoToElena: g.family[3].pos.distanceTo(g.family[1].pos).toFixed(1), kids: g.family.filter((m) => m.ai).map((m) => m.doing()), fam: g.family.map((m) => `${m.name}:${m.status()[0]}:${Math.round(m.needs.hydration)}:${m.bodyT.toFixed(1)}`),
     log: [...document.querySelectorAll('#log div')].map((d) => d.textContent).slice(-5),
   };
 });
@@ -99,6 +99,37 @@ const calib = await page.evaluate(() => {
   g.sim.min = simMin; g.sim.indoor = indoor; g.log = logFn; g.onDeath = onDeath; g.alarm = alarm;
   return out;
 });
+// scenarios driven directly through the game API (no waiting on slow software rendering)
+const scen = await page.evaluate(() => {
+  const g = window.__game;
+  const [marcus, elena, jess, theo] = g.family;
+  const run = (n, until) => { const sp = g.sim.speed; g.sim.speed = 10; for (let i = 0; i < n; i++) { g.sim.step(0.5); for (const m of g.family) m.update(0.5, 0.05); if (until && until()) break; } g.sim.speed = sp; };
+  const res = {};
+  // 1. two parents, two containers, both stay open
+  const pantry = g.map.objects.find((o) => o.home && o.ch === 'K');
+  const closet = g.map.objects.find((o) => o.home && o.ch === 'C');
+  marcus.useObject(pantry, 'search'); elena.useObject(closet, 'search');
+  run(200, () => g.opens.size === 2);
+  res.bothOpen = g.opens.size;
+  // 2. whole-family mattress job
+  const crew = g.family.filter((m) => !m.dead);
+  g.startJob(marcus, { label: 'Moving mattresses', dur: 15, crew, anchor: [31, 11], done: () => g.moveMattresses() });
+  run(600, () => g.mattressesMoved);
+  res.mattresses = !!g.mattressesMoved;
+  res.jobKids = [jess.doing(), theo.doing()];
+  // 3. Marcus collapses in the street; Elena drags, Jess helps
+  marcus.stopTask(true); marcus.pos.set(30.5, 0, 21.5);
+  g.sim.min = 15 * 60; marcus.bodyT = 105; marcus.updateBody(0.1);
+  res.collapsed = marcus.collapsed;
+  elena.tend(marcus, 'drag'); jess.order('help', elena);
+  let carried = false;
+  run(800, () => { if (elena.task?.type === 'drag' && elena.helpers(2.6).length) carried = true; return g.map.isIndoor(...marcus.cell()) && !marcus.draggedBy; });
+  res.carriedWithHelp = carried;
+  res.marcusIndoor = g.map.isIndoor(...marcus.cell());
+  res.log = [...document.querySelectorAll('#log div')].map((d) => d.textContent).slice(-8);
+  return res;
+});
+console.log('scenarios:', JSON.stringify(scen, null, 1));
 console.log('calibration (game hours):', JSON.stringify(calib, null, 1));
 console.log(JSON.stringify({ r, state }, null, 1));
 console.log(errors.length ? 'ERRORS:\n' + errors.join('\n') : 'no page errors');

@@ -1,19 +1,19 @@
 // The household: four people, their bodies, their bags, and what they're doing.
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { findPath } from './path.js';
+import { findPath, nearbyWalkable } from './path.js';
 import { makeEntry, invKg } from './inventory.js';
 
 // walk: meters per real second at 1x. Space is compressed: crossing the block costs game minutes.
 // deficit: liters of body water already lost at the start (a hot night with the AC off at the end).
 export const FAMILY = [
-  { id: 'marcus', name: 'Marcus', age: 41, role: 'Dad', h: 1.8, mass: 84, color: 0x56677a, cap: 28, speed: 2.6,
+  { id: 'marcus', name: 'Marcus', age: 41, role: 'Dad', pr: ['he', 'him', 'his'], h: 1.8, mass: 84, color: 0x56677a, cap: 28, speed: 2.6,
     at: [24, 7], start: ['car_keys', 'phone_dead'], deficit: 0.6, needs: { food: 70, energy: 55, morale: 60 } },
-  { id: 'elena', name: 'Elena', age: 38, role: 'Mom', h: 1.66, mass: 64, color: 0x8a5a4a, cap: 24, speed: 2.5,
+  { id: 'elena', name: 'Elena', age: 38, role: 'Mom', pr: ['she', 'her', 'her'], h: 1.66, mass: 64, color: 0x8a5a4a, cap: 24, speed: 2.5,
     at: [25, 8], start: ['water_bottle', 'bp_meds'], deficit: 0.5, needs: { food: 68, energy: 58, morale: 62 } },
-  { id: 'jess', name: 'Jess', age: 15, role: 'Daughter', h: 1.62, mass: 52, color: 0x5f7046, cap: 18, speed: 2.7,
+  { id: 'jess', name: 'Jess', age: 15, role: 'Daughter', pr: ['she', 'her', 'her'], h: 1.62, mass: 52, color: 0x5f7046, cap: 18, speed: 2.7,
     at: [29, 11], start: ['phone_dead'], deficit: 0.45, needs: { food: 62, energy: 50, morale: 45 } },
-  { id: 'theo', name: 'Theo', age: 7, role: 'Son', h: 1.2, mass: 24, color: 0xb08a3a, cap: 8, speed: 2.0,
+  { id: 'theo', name: 'Theo', age: 7, role: 'Son', pr: ['he', 'him', 'his'], h: 1.2, mass: 24, color: 0xb08a3a, cap: 8, speed: 2.0,
     at: [25, 14], start: ['stuffed_animal'], deficit: 0.2, needs: { food: 60, energy: 62, morale: 58 } },
 ];
 
@@ -24,6 +24,10 @@ export class Member {
   constructor(def, gltf, baseH, game) {
     Object.assign(this, { id: def.id, name: def.name, age: def.age, role: def.role, cap: def.cap, walk: def.speed, mass: def.mass });
     this.def = def;
+    const cap1 = (w) => w[0].toUpperCase() + w.slice(1);
+    [this.he, this.him, this.his] = def.pr;
+    this.He = cap1(this.he);
+    this.His = cap1(this.his);
     this.game = game;
     this.child = def.age < 12;
     this.teen = def.age >= 13 && def.age < 18;
@@ -42,6 +46,10 @@ export class Member {
     this.dead = false;
     this.flags = {};
     this.refusedAt = -1e9;
+    // the kids are not yours to steer: they follow, wait, and look after themselves (badly)
+    this.ai = this.child || this.teen;
+    this.mode = this.child ? { type: 'follow', who: 'elena' } : this.teen ? { type: 'stay' } : null;
+    this.thinkT = 0;
     this.syncHydration();
 
     // body
@@ -126,6 +134,79 @@ export class Member {
     return true;
   }
 
+  walkTo(x, y) {
+    const [cx, cy] = this.cell();
+    const p = findPath(this.game.map, cx, cy, x, y);
+    if (p) this.path = p;
+    return !!p;
+  }
+  // People assisting this one who are close enough to actually help.
+  helpers(r = 2.4) {
+    return this.game.family.filter((m) => m !== this && m.canAct() && m.task?.type === 'assist' && m.task.lead === this && m.pos.distanceTo(this.pos) <= r);
+  }
+  helpRate() { return 1 + 0.7 * this.helpers().length; }
+
+  // Commands a parent gives a kid (or the other parent).
+  order(type, from) {
+    const g = this.game;
+    if (!this.canAct()) return;
+    if (type === 'stay' && this.child && this.needs.morale < 30) {
+      g.log(`Theo: "No! Don't leave me!" He grabs ${from.name}'s shirt and won't let go.`, 'warn');
+      this.mode = { type: 'follow', who: from.id };
+      return;
+    }
+    if (!this.willObey()) return;
+    this.stopTask(true);
+    if (type === 'follow') { this.mode = { type: 'follow', who: from.id }; g.log(`${this.name} sticks close to ${from.name}.`); }
+    else if (type === 'stay') { this.mode = { type: 'stay' }; g.log(`${this.name} stays put.`); }
+    else if (type === 'help') { this.task = { type: 'assist', lead: from, t: 0, dur: Infinity }; g.log(`${this.name} goes to help ${from.name}.`); }
+    else if (type === 'drink') this.useObject(g.map.tub, 'drinkTub');
+    else if (type === 'rest') {
+      const bed = g.freeBed(this);
+      if (bed) this.useObject(bed, 'sleep'); else { this.goal = { type: 'sleep', obj: null }; this.startTask(); }
+    }
+  }
+
+  // Kids' own little brain, a couple of times a game minute.
+  think(dtMin) {
+    if (!this.ai || !this.canAct()) return;
+    this.thinkT -= dtMin;
+    if (this.thinkT > 0) return;
+    this.thinkT = 0.5;
+    const g = this.game, sim = g.sim, map = g.map;
+    const busy = this.task && this.task.type !== 'assist';
+    if (busy || this.goal) return;
+    const atHome = map.houseOf(...this.cell()) === map.lots.indexOf(map.home);
+    const idle = !this.task && !this.path.length;
+    if (idle && this.needs.energy < 12) {
+      g.log(this.child ? 'Theo curls up on the floor and falls asleep where he is.' : 'Jess drops onto the floor, done for. She\'s asleep in a minute.');
+      this.goal = { type: 'sleep', obj: null }; this.startTask(); return;
+    }
+    if (idle && this.teen && this.pct > 2 && atHome && sim.tubL >= 1 && this.mode.type === 'stay') {
+      g.log('Jess gets herself a drink from the tub without asking.');
+      this.useObject(map.tub, 'drinkTub'); return;
+    }
+    if (this.child && this.flags.alone && this.needs.morale < 35 && this.mode.type === 'stay') {
+      const p = g.family.filter((m) => !m.ai && !m.dead).sort((a, b) => a.pos.distanceTo(this.pos) - b.pos.distanceTo(this.pos))[0];
+      if (p) { this.mode = { type: 'follow', who: p.id }; g.log(`Theo can't stand being alone any more. He goes looking for ${p.name}.`, 'warn'); }
+    }
+    if (this.task?.type === 'assist') { this.stayNear(this.task.lead, 1.6); return; }
+    if (this.mode.type === 'follow') {
+      const p = g.family.find((m) => m.id === this.mode.who);
+      if (!p || p.dead) { this.mode = { type: 'stay' }; return; }
+      this.stayNear(p, 2.4);
+    }
+  }
+
+  stayNear(p, r) {
+    if (p.dead) { this.task = null; return; }
+    if (this.pos.distanceTo(p.pos) <= r) { this.path = []; return; }
+    const [px, py] = p.cell();
+    const avoid = new Set(this.game.family.filter((m) => m !== this).map((m) => m.cell()[1] * this.game.map.W + m.cell()[0]));
+    const spot = nearbyWalkable(this.game.map, px, py, 1, avoid)[0] || [px, py];
+    this.walkTo(spot[0], spot[1]);
+  }
+
   // Walk to the closest standing spot among `cells`, then start goal.
   approach(cells, goal, what) {
     if (!this.canAct()) return false;
@@ -168,6 +249,7 @@ export class Member {
     const dur = {
       search: (o?.home ? 4 : o?.car ? 6 : 8) * slow,
       open: 0.3, drinkTap: 3, drinkTub: 2, fillCont: 4, soak: 5, douse: 3, fillTub: Infinity, sleep: Infinity, drag: Infinity,
+      job: g.job?.dur ?? 15,
     }[g.type] ?? 1;
     if (g.type === 'fillTub') {
       const other = this.game.family.find((m) => m !== this && m.task?.type === 'fillTub');
@@ -177,17 +259,26 @@ export class Member {
     if (g.type === 'drag') {
       const v = g.victim;
       if (v.dead || !v.collapsed) return;
-      if (this.mass < v.mass * 0.55) { this.game.log(`${this.name} pulls at ${v.name}'s arm but can't move ${v.child ? 'him' : 'them'}.`, 'warn'); return; }
+      const crewMass = this.mass + this.helpers(2.6).reduce((s, m) => s + m.mass, 0);
+      const coming = this.game.family.some((m) => m.task?.type === 'assist' && m.task.lead === this && m.canAct());
+      if (crewMass < v.mass * 0.55 && coming) {
+        this.task = { type: 'waitHelp', victim: v, t: 0, dur: Infinity };
+        this.game.log(`${this.name} can't lift ${v.name} alone and waits for help.`);
+        return;
+      }
+      if (crewMass < v.mass * 0.55) { this.game.log(`${this.name} pulls at ${v.name}'s arm but can't move ${v.him}.`, 'warn'); return; }
       const dest = this.game.nearestShade(this.cell());
-      if (!dest) { this.game.log('Nowhere out of the sun to drag them.', 'warn'); return; }
+      if (!dest) { this.game.log(`Nowhere out of the sun to drag ${v.him}.`, 'warn'); return; }
       const [cx, cy] = this.cell();
       const p = findPath(this.game.map, cx, cy, dest[0], dest[1]);
       if (!p) return;
       v.draggedBy = this;
       this.path = p;
-      this.task = { ...g, t: 0, dur };
+      this.task = { ...g, t: 0, dur, dest };
       if (!p.length) { this.finishDrag(); return; }
-      this.game.log(`${this.name} gets ${v.name} under the arms and drags ${v.child ? 'him' : 'them'} toward the shade.`, 'warn');
+      const hs = this.helpers(2.6);
+      this.game.log(hs.length ? `${this.name} and ${hs.map((m) => m.name).join(' and ')} lift ${v.name} and carry ${v.him} toward the shade.`
+        : `${this.name} gets ${v.name} under the arms and drags ${v.him} toward the shade.`, 'warn');
       return;
     }
     this.task = { ...g, t: 0, dur };
@@ -231,7 +322,7 @@ export class Member {
     this.layFlat(0.05);
     this.mixer.stopAllAction();
     this.cur = null;
-    this.game.log(`${this.name} collapses. Heat stroke: hot dry skin, eyes rolling. ${this.child ? 'He' : 'They'} can't get up. Get ${this.child ? 'him' : 'them'} out of the heat and cool ${this.child ? 'him' : 'them'} down with water. Now.`, 'dead');
+    this.game.log(`${this.name} collapses. Heat stroke: hot dry skin, eyes rolling. ${this.He} can't get up. Get ${this.him} out of the heat and cool ${this.him} down with water. Now.`, 'dead');
     this.game.alarm();
   }
   revive() {
@@ -239,7 +330,7 @@ export class Member {
     if (this.draggedBy) { this.draggedBy.stopTask(true); this.draggedBy = null; }
     this.standUp();
     this.play('idle');
-    this.game.log(`${this.name} comes around, shaking and nauseous. ${this.child ? 'He' : 'They'} need water and rest.`, 'warn');
+    this.game.log(`${this.name} comes around, shaking and nauseous. ${this.He} needs water and rest.`, 'warn');
   }
 
   die(cause) {
@@ -266,7 +357,7 @@ export class Member {
       this.obj.rotation.y = d.obj.rotation.y + Math.PI;
     } else if (this.path.length && sim.speed > 0 && this.canAct()) {
       const sick = this.bodyT >= EXHAUSTION_F ? 0.7 : 1;
-      const dragging = this.task?.type === 'drag' ? 0.45 : 1;
+      const dragging = this.task?.type === 'drag' ? (this.helpers(2.6).length ? 0.85 : 0.45) : 1;
       let dist = this.walk * sick * dragging * dtReal * sim.speed;
       while (dist > 0 && this.path.length) {
         const [nx, ny] = this.path[0];
@@ -299,14 +390,24 @@ export class Member {
     }
 
     if (dtMin <= 0) return;
+    if (this.ai) this.think(dtMin);
+    else if (this.task?.type === 'assist' && this.canAct()) { this.assistT = (this.assistT || 0) - dtMin; if (this.assistT <= 0) { this.assistT = 0.5; this.stayNear(this.task.lead, 1.6); } }
+    if (this.task?.type === 'assist' && (!this.task.lead.task && !this.task.lead.goal || this.task.lead.dead)) this.task = null;
     this.updateTask(dtMin);
     this.updateBody(dtMin);
   }
 
   finishDrag() {
     const v = this.task.victim;
+    const dest = this.task.dest;
     this.task = null;
-    if (v) { v.draggedBy = null; v.pos.y = 0.05; }
+    if (v) {
+      v.draggedBy = null;
+      const [x, y] = dest || this.cell();
+      v.pos.set(x + 0.5, 0.05, y + 0.5);
+      const spot = nearbyWalkable(this.game.map, x, y, 2).find(([a, b]) => a !== x || b !== y);
+      if (spot) { this.pos.set(spot[0] + 0.5, 0, spot[1] + 0.5); }
+    }
     this.game.log(`${this.name} gets ${v?.name} into the shade.`);
   }
 
@@ -314,7 +415,23 @@ export class Member {
     const t = this.task;
     if (!t || t.type === 'drag') return;
     const g = this.game, sim = g.sim;
-    t.t += dtMin;
+    if (t.type === 'assist') return;
+    if (t.type === 'waitHelp') {
+      const v = t.victim;
+      const crew = this.mass + this.helpers(2.6).reduce((s, m) => s + m.mass, 0);
+      if (v.dead || !v.collapsed) { this.task = null; return; }
+      if (crew >= v.mass * 0.55) { this.task = null; this.goal = { type: 'drag', victim: v }; this.startTask(); }
+      return;
+    }
+    if (t.type === 'job') {
+      const crew = t.job.crew.filter((m) => !m.dead);
+      const ready = crew.every((m) => m === this || (m.canAct() && m.task?.type === 'assist' && m.task.lead === this && m.pos.distanceTo(this.pos) < 4.5));
+      t.waiting = !ready;
+      if (ready) t.t += dtMin;
+      if (t.t >= t.dur) { this.task = null; t.job.done(); }
+      return;
+    }
+    t.t += dtMin * (['search', 'fillCont'].includes(t.type) ? this.helpRate() : 1);
     if (t.type === 'fillTub') {
       const p = sim.pressure();
       if (p <= 0.001) {
@@ -368,7 +485,7 @@ export class Member {
     const [cx, cy] = this.cell();
     const indoor = map.isIndoor(cx, cy);
     this.indoor = indoor;
-    this.felt = indoor ? sim.indoor + (map.isGarage(cx, cy) ? 5 : 0) : sim.outdoor() + 14 * sim.sun();
+    this.felt = indoor ? sim.indoor + (map.isGarage(cx, cy) ? 5 : 0) - (this.bed?.together ? 2 : 0) : sim.outdoor() + 14 * sim.sun();
     const working = this.task && !this.asleep;
     const act = this.collapsed || this.draggedBy ? 0.8 : this.asleep ? 0.6
       : this.path.length ? (this.task?.type === 'drag' ? 2.2 : 1.4) : working ? 1.2 : 1;
@@ -395,7 +512,12 @@ export class Member {
     // ---- other needs
     n.food -= 1.1 * act * h;
     if (this.asleep) {
-      const q = this.felt > 95 ? 0.4 : this.felt > 88 ? 0.65 : 1; // nobody sleeps well at 95°F
+      let q = this.felt > 95 ? 0.4 : this.felt > 88 ? 0.65 : 1; // nobody sleeps well at 95°F
+      if (this.bed?.together) {
+        q = Math.min(1, q * 1.3);
+        const near = g.family.filter((m) => m !== this && m.asleep && m.bed?.together).length;
+        n.morale += near * 0.8 * h; // everyone in one room, breathing
+      }
       n.energy += 13 * q * h;
     } else if (!this.collapsed) n.energy -= 3.2 * act * h;
 
@@ -423,7 +545,7 @@ export class Member {
     if (this.bodyT >= EXHAUSTION_F && !this.collapsed && g.rng.chance(0.3 * h)) {
       this.drink(-(this.child ? 0.15 : 0.3));
       n.food -= 5;
-      g.log(`${this.name} throws up${this.indoor ? '' : ' in the dirt'}. Losing water ${this.child ? 'he' : 'they'} can't spare.`, 'bad');
+      g.log(`${this.name} throws up${this.indoor ? '' : ' in the dirt'}. Losing water ${this.he} can't spare.`, 'bad');
     }
 
     for (const k of Object.keys(n)) n[k] = clamp(n[k]);
@@ -431,7 +553,7 @@ export class Member {
     else if (this.collapsed && this.bodyT < RECOVER_F) this.revive();
     this.alerts();
     if (n.health <= 0) {
-      const cause = this.bodyT >= 104 ? 'Heat stroke.' : pct > 5 ? 'Dehydration.' : 'Their body gave out.';
+      const cause = this.bodyT >= 104 ? 'Heat stroke.' : pct > 5 ? 'Dehydration.' : `${this.His} body gave out.`;
       this.die(cause);
     }
   }
@@ -449,7 +571,7 @@ export class Member {
     say('severe', pct > 4.5, pct < 3.5, `${this.name} is severely dehydrated: dizzy, confused, barely sweating.`, 'bad');
     say('hot', this.bodyT >= EXHAUSTION_F, this.bodyT < 100.2, kid ? `Theo is flushed and limp. He's overheating, fast. Kids heat up quicker than adults.` : `${this.name} has heat exhaustion: pounding head, nausea, cramping.`, 'bad');
     say('hungry', n.food < 25, n.food > 40, kid ? `Theo: "My stomach hurts. When's breakfast?"` : `${this.name} is hungry.`);
-    say('tired', n.energy < 20, n.energy > 40, `${this.name} can barely keep their eyes open.`);
+    say('tired', n.energy < 20, n.energy > 40, `${this.name} can barely keep ${this.his} eyes open.`);
     if (kid) {
       say('alone', f.alone && n.morale < 50, !f.alone, `Theo: "Mom? Dad? Where are you?" He doesn't like being alone in this.`);
       say('crying', n.morale < 25, n.morale > 35, `Theo is crying and won't stop. Everyone can hear it.`, 'bad');
@@ -497,9 +619,13 @@ export class Member {
         drinkTub: 'Drinking from the tub', fillCont: 'Filling containers', fillTub: 'Filling the tub',
         soak: 'Soaking a towel', douse: `Pouring water over ${t.victim?.name}`, drag: `Dragging ${t.victim?.name}`,
         sleep: t.obj ? 'Sleeping' : 'Sleeping on the floor',
+        assist: `Helping ${t.lead?.name}`, waitHelp: `Waiting for help to lift ${t.victim?.name}`,
+        job: t.waiting ? `${t.job?.label}: waiting for everyone` : t.job?.label,
       }[t.type] || '';
     }
+    if (this.ai && this.mode?.type === 'follow') return `Following ${this.game.family.find((m) => m.id === this.mode.who)?.name}`;
     if (this.path.length) return 'Walking';
+    if (this.ai && this.mode?.type === 'stay') return 'Staying put';
     if (this.wetMin > 0) return 'Wet towel on';
     return '';
   }
