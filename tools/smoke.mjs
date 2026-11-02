@@ -65,6 +65,41 @@ await page.evaluate(() => { const g = window.__game; g.sim.min = 15 * 60; });
 await page.waitForTimeout(800);
 await page.screenshot({ path: `${out}/ds-afternoon.png` });
 
+// physiology calibration: run the real body model in-page, no rendering
+const calib = await page.evaluate(() => {
+  const g = window.__game;
+  const out = {};
+  const snap = (m) => ({ deficit: m.deficit, bodyT: m.bodyT, needs: { ...m.needs }, collapsed: m.collapsed, dead: m.dead, flags: { ...m.flags } });
+  const restore = (m, s) => Object.assign(m, { deficit: s.deficit, bodyT: s.bodyT, needs: s.needs, collapsed: s.collapsed, dead: s.dead, flags: s.flags });
+  const simMin = g.sim.min, indoor = g.sim.indoor, logFn = g.log, onDeath = g.onDeath, alarm = g.alarm;
+  g.log = () => {}; g.onDeath = () => {}; g.alarm = () => {};
+  for (const [label, startMin, cell, walking] of [['outside 3PM walking', 15 * 60, [30, 17], true], ['indoors from 6AM idle', 6 * 60, [29, 11], false]]) {
+    for (const m of [g.family[0], g.family[3]]) {
+      const s = snap(m); const pos = m.pos.clone();
+      Object.assign(m, { deficit: 0.3, bodyT: 98.6, collapsed: false, dead: false, flags: {} });
+      m.needs.health = 100;
+      g.sim.min = startMin; g.sim.indoor = startMin < 7 * 60 ? 79 : 92;
+      m.pos.set(cell[0] + 0.5, 0, cell[1] + 0.5);
+      m.path = walking ? [[9999, 9999]] : []; m.task = null;
+      const marks = {};
+      for (let t = 0; t < 48 * 60 && !m.dead; t += 0.5) {
+        g.sim.step(0.5);
+        m.updateBody(0.5);
+        const h = (t / 60).toFixed(2);
+        if (!marks.thirsty && m.pct > 1.2) marks.thirsty = h;
+        if (!marks.dehydrated && m.pct > 2.5) marks.dehydrated = h;
+        if (!marks.exhaustion && m.bodyT >= 101.5) marks.exhaustion = h;
+        if (!marks.collapse && m.collapsed) marks.collapse = h;
+        if (m.needs.health <= 0) { marks.death = h; break; }
+      }
+      out[`${label} / ${m.name}`] = marks;
+      m.path = []; restore(m, s); m.pos.copy(pos);
+    }
+  }
+  g.sim.min = simMin; g.sim.indoor = indoor; g.log = logFn; g.onDeath = onDeath; g.alarm = alarm;
+  return out;
+});
+console.log('calibration (game hours):', JSON.stringify(calib, null, 1));
 console.log(JSON.stringify({ r, state }, null, 1));
 console.log(errors.length ? 'ERRORS:\n' + errors.join('\n') : 'no page errors');
 await browser.close();

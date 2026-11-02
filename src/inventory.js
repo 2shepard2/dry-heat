@@ -15,12 +15,13 @@ const EMPTY_KG = {
 const REFILLABLE = new Set(['water_gallon', 'water_gallon_half', 'water_cooler_jug', 'bucket_5gal', 'cooler']);
 const STARTS_EMPTY = new Set(['bucket_5gal', 'cooler']);
 
-export const capOf = (id) => (id === 'cooler' ? 40 : ITEMS[id].liters || 0);
+const CAP = { cooler: 40, water_gallon_half: 3.8 };
+export const capOf = (id) => CAP[id] ?? (ITEMS[id].liters || 0);
 export const isLiquid = (e) => e.left !== undefined;
 export const refillable = (e) => isLiquid(e) && REFILLABLE.has(e.id) && e.left < capOf(e.id) - 0.05;
 
 export function makeEntry(id, n = 1) {
-  if (PER_L[id]) return { id, n: 1, left: STARTS_EMPTY.has(id) ? 0 : capOf(id) };
+  if (PER_L[id]) return { id, n: 1, left: STARTS_EMPTY.has(id) ? 0 : (ITEMS[id].liters || capOf(id)) };
   return { id, n };
 }
 

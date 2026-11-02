@@ -140,11 +140,15 @@ export function buildMap() {
     idx, inB,
     get: (x, y) => (inB(x, y) ? type[idx(x, y)] : 0),
     walkable: (x, y) => inB(x, y) && WALKABLE.has(type[idx(x, y)]),
-    isIndoor(x, y) {
+    under(x, y) {
       const t = map.get(x, y);
+      return t === T.FURN ? objects[objAt[idx(x, y)]].floor ?? T.FLOOR : t;
+    },
+    isIndoor(x, y) {
+      const t = map.under(x, y);
       return t === T.FLOOR || t === T.DOOR || t === T.GARAGE || t === T.GDOOR;
     },
-    isGarage(x, y) { const t = map.get(x, y); return t === T.GARAGE || t === T.GDOOR; },
+    isGarage(x, y) { const t = map.under(x, y); return t === T.GARAGE || t === T.GDOOR; },
     houseOf(x, y) {
       for (let i = 0; i < lots.length; i++) {
         const b = lots[i].house;

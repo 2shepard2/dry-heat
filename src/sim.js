@@ -43,8 +43,8 @@ export class Sim {
 
   step(dtMin) {
     this.min += dtMin;
-    // An unpowered stucco house drifts toward outdoor-6°F with a ~6 hour lag.
-    const target = this.outdoor() - 6;
-    this.indoor += (target - this.indoor) * Math.min(1, dtMin / 360);
+    // An unpowered stucco house drifts toward outdoor-4°F with a ~10 hour lag: it gets worse every day.
+    const target = this.outdoor() - 4;
+    this.indoor += (target - this.indoor) * Math.min(1, dtMin / 600);
   }
 }

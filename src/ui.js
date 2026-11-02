@@ -65,7 +65,8 @@ export class UI {
       `<span class="${out >= 110 ? 'bad' : out >= 100 ? 'warn' : ''}">Outside ${out}°F${sim.sun() > 0.2 ? ' ☀' : ''}</span>` +
       `<span class="${ins >= 95 ? 'bad' : ins >= 88 ? 'warn' : ''}">Inside ${ins}°F</span>` +
       `<span class="${water === 'dead' ? 'bad' : water === 'sputtering' ? 'warn' : ''}">Taps: ${water}</span>` +
-      `<span>Tub: ${Math.round(sim.tubL)} L</span>`;
+      (() => { const w = g.waterDays(); const d = w.days; const cls = d < 2 ? 'bad' : d < 4 ? 'warn' : '';
+        return `<span class="${cls}" title="Tub plus carried water, at today's indoor rate (${w.perDay.toFixed(1)} L/day for the family)">Water: ${Math.round(w.liters)} L ≈ ${isFinite(d) ? d.toFixed(1) : '∞'} days</span>`; })();
     for (const b of document.querySelectorAll('#speed button')) b.classList.toggle('on', Number(b.dataset.s) === sim.speed);
 
     // objectives
@@ -80,9 +81,9 @@ export class UI {
       const n = m.needs;
       const pr = m.progress();
       return `<div class="card ${sel ? 'sel' : ''} ${m.dead ? 'deadc' : ''}" data-id="${m.id}">
-        <div class="nm"><b>${m.name}</b> <span>${m.role}, ${m.age}</span></div>
-        <div class="st ${sk}">${st} · ${m.bodyT.toFixed(1)}°F <span class="felt">feels ${Math.round(m.felt)}°</span></div>
-        ${bar('Water', n.hydration)}${bar('Food', n.food)}${bar('Rest', n.energy)}${bar('Health', n.health)}${bar('Spirit', n.morale)}
+        <div class="nm">${sel ? '<span class="sel-mark">▶ </span>' : ''}<b>${m.name}</b> <span>${m.role}, ${m.age} · ${m.mass} kg</span></div>
+        <div class="st ${sk}">${st} · core ${m.bodyT.toFixed(1)}°F <span class="felt">feels ${Math.round(m.felt)}°${m.wetMin > 0 ? ' · wet' : ''}</span></div>
+        ${bar(`Water −${m.deficit.toFixed(1)} L`, n.hydration)}${bar('Food', n.food)}${bar('Rest', n.energy)}${bar('Health', n.health)}${bar('Spirit', n.morale)}
         <div class="do">${esc(m.doing())}${pr !== null ? ` <em>${Math.round(pr * 100)}%</em>` : ''}</div>
       </div>`;
     }).join(''));

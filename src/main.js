@@ -31,7 +31,7 @@ const sim = new Sim();
 
 // isometric orthographic camera that orbits in 90° steps
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 400);
-const cam = { target: new THREE.Vector3(30, 0, 11), yaw: Math.PI / 4, yawGoal: Math.PI / 4, view: 30, zoom: 1 };
+const cam = { target: new THREE.Vector3(29, 0, 11), yaw: Math.PI / 4, yawGoal: Math.PI / 4, view: 30, zoom: 2.1 };
 function placeCamera() {
   const d = 80;
   camera.position.set(cam.target.x + Math.sin(cam.yaw) * d, d * 0.95, cam.target.z + Math.cos(cam.yaw) * d);
@@ -110,7 +110,7 @@ const game = {
     }
     game.openContainer(m, o);
   },
-  openContainer(m, o) { game.open = { member: m, obj: o }; select(m, false); },
+  openContainer(m, o) { game.open = { member: m, obj: o }; if (!game.selected.length) select(m, false); },
 
   fillContainers(m) {
     let filled = 0;
@@ -136,24 +136,34 @@ const game = {
     if (consumable) {
       const verb = isLiquid(e) ? 'Drink 1 L' : it.cat === 'water' ? 'Drink' : it.cat === 'food' ? 'Eat' : 'Use';
       const empty = isLiquid(e) && e.left < 0.05;
-      items.push({ label: `${verb} (${m.name})`, disabled: empty, fn: () => game.useItem(m, i, m) });
+      const at = () => m.inv.indexOf(e);
+      items.push({ label: `${verb} (${m.name})`, disabled: empty || !m.canAct(), fn: () => game.useItem(m, at(), m) });
       for (const o of others) {
         const ok = game.near(m, o);
         items.push({ label: `${verb.replace('Drink', 'Give a drink').replace('Eat', 'Feed').replace('Use', 'Use on')} → ${o.name}`,
-          hint: ok ? '' : 'too far away', disabled: !ok || empty, fn: () => game.useItem(m, i, o) });
+          hint: ok ? '' : 'too far away', disabled: !ok || empty || o.collapsed, fn: () => game.useItem(m, at(), o) });
+      }
+    }
+    const at = () => m.inv.indexOf(e);
+    if (isLiquid(e)) {
+      for (const o of game.family.filter((x) => !x.dead)) {
+        const ok = game.near(m, o);
+        items.push({ label: `Pour over ${o === m ? 'yourself' : o.name} to cool down`, hint: ok ? `uses up to 2 L` : 'too far away', disabled: !ok || e.left < 0.3,
+          fn: () => game.pourOver(m, e, o) });
       }
     }
     for (const o of others) {
       const ok = game.near(m, o);
-      items.push({ label: `Hand to ${o.name}`, hint: ok ? '' : 'too far away', disabled: !ok, fn: () => game.give(m, i, o) });
+      items.push({ label: `Hand to ${o.name}`, hint: ok ? '' : 'too far away', disabled: !ok || o.collapsed, fn: () => game.give(m, at(), o) });
     }
-    if (game.open && game.open.member === m) items.push({ label: `Put in ${game.open.obj.name.toLowerCase()}`, fn: () => game.put(m, game.open.obj, i) });
+    if (game.open && game.open.member === m) items.push({ label: `Put in ${game.open.obj.name.toLowerCase()}`, fn: () => game.put(m, game.open.obj, at()) });
     ui.menu(x, y, items, label(e, sim));
   },
 
   useItem(owner, i, target) {
     const e = owner.inv[i];
-    if (!e || target.dead) return;
+    if (!e || target.dead || !owner.canAct()) return;
+    if (!game.near(owner, target)) { game.log(`${target.name} is too far away now.`, 'warn'); return; }
     const it = ITEMS[e.id];
     const tags = it.tags || [];
     const hasTool = (ids) => [owner, target].some((p) => p.inv.some((x) => ids.includes(x.id)));
@@ -162,17 +172,33 @@ const game = {
       game.log(`${owner.name} can't get the can open. Need a can opener, or at least a knife.`, 'warn'); return;
     }
     const n = target.needs;
+    // hydration values in the data are "points per 35"; the body works in liters
+    const apply = (use, k = 1) => {
+      for (const [key, v] of Object.entries(use)) {
+        if (key === 'hydration') target.drink((v * k) / 35);
+        else n[key] = clamp(n[key] + v * k);
+      }
+    };
+    if (tags.includes('needsWater')) {
+      const src = [owner, target].flatMap((p) => p.inv).find((x) => isLiquid(x) && PER_L[x.id]?.hydration >= 35 && x.left >= 0.5);
+      if (!src) { game.log(`${it.name} has to be mixed with clean water. Nobody here is carrying any.`, 'warn'); return; }
+      const l = Math.min(1, src.left);
+      src.left -= l;
+      target.drink(l * (e.id === 'electrolyte_packets' ? 1.3 : 1));
+    }
     if (isLiquid(e)) {
-      const l = Math.min(1, e.left);
+      const l = Math.min(target.child ? 0.5 : 1, e.left);
       if (l < 0.05) return;
-      for (const [k, v] of Object.entries(PER_L[e.id])) n[k] = clamp(n[k] + v * l);
+      const sp = isSpoiled(e, sim);
+      apply(PER_L[e.id], l);
+      if (sp) { n.health = clamp(n.health - 10); target.drink(-0.3); game.log(`It's turned. ${target.name} gags on it.`, 'bad'); }
       e.left = Math.max(0, e.left - l);
       if (!['water_gallon', 'water_gallon_half', 'water_cooler_jug', 'bucket_5gal', 'cooler'].includes(e.id) && e.left < 0.05) owner.inv.splice(i, 1);
       game.log(`${target.name} drinks ${l.toFixed(1)} L of ${it.name.toLowerCase()}.`);
       return;
     }
     const spoiled = isSpoiled(e, sim);
-    for (const [k, v] of Object.entries(it.use || {})) n[k] = clamp(n[k] + v);
+    apply(it.use || {});
     if (spoiled) { n.health = clamp(n.health - 12); n.morale = clamp(n.morale - 6); }
     e.n -= 1;
     if (e.n <= 0) owner.inv.splice(i, 1);
@@ -204,7 +230,49 @@ const game = {
     for (let i = o.items.length - 1; i >= 0; i--) game.moveEntry(o.items, i, m.inv, true, m.cap, m.name);
   },
   put(m, o, i) { game.moveEntry(m.inv, i, o.items, true, Infinity, m.name); },
-  give(m, i, o) { if (game.moveEntry(m.inv, i, o.inv, true, o.cap, o.name)) game.log(`${m.name} hands ${o.name} the ${ITEMS[(o.inv.at(-1) || {}).id]?.name.toLowerCase() || 'item'}.`); },
+  give(m, i, o) { if (!game.near(m, o) || o.dead) { game.log(`${o.name} is too far away now.`, 'warn'); return; } if (game.moveEntry(m.inv, i, o.inv, true, o.cap, o.name)) game.log(`${m.name} hands ${o.name} the ${ITEMS[(o.inv.at(-1) || {}).id]?.name.toLowerCase() || 'item'}.`); },
+
+  rng: null,
+  pourOver(m, e, o) {
+    if (!game.near(m, o) || !m.canAct()) { game.log(`${o.name} is too far away now.`, 'warn'); return; }
+    const l = Math.min(2, e.left);
+    if (l < 0.3) return;
+    e.left -= l;
+    o.wetMin = 50;
+    o.bodyT = Math.max(98.6, o.bodyT - 0.6 * l);
+    game.log(`${m.name} pours ${l.toFixed(1)} L over ${o === m ? 'their own head and neck' : o.name}. Water that won't be drunk.`);
+  },
+  douse(m, v) {
+    if (v.dead) return;
+    const src = m.inv.find((x) => isLiquid(x) && x.left >= 0.5 && PER_L[x.id]?.hydration);
+    const nearTub = map.tub && Math.hypot(map.tub.x + 0.5 - m.pos.x, map.tub.y + 0.5 - m.pos.z) < 3.5 && sim.tubL >= 1;
+    if (src) game.pourOver(m, src, v);
+    else if (nearTub) { const l = Math.min(3, sim.tubL); sim.tubL -= l; v.wetMin = 60; v.bodyT = Math.max(98.6, v.bodyT - 0.6 * l); game.log(`${m.name} scoops ${l.toFixed(0)} L from the tub over ${v.name}.`); }
+    else game.log(`${m.name} has no water to pour. Carry a jug, or get ${v.name} to the tub.`, 'warn');
+  },
+  // nearest walkable indoor cell (or anywhere at night)
+  nearestShade([sx, sy]) {
+    if (sim.sun() < 0.05 || map.isIndoor(sx, sy)) return [sx, sy];
+    const seen = new Set([sy * map.W + sx]);
+    const q = [[sx, sy]];
+    while (q.length) {
+      const [x, y] = q.shift();
+      if (map.walkable(x, y) && map.isIndoor(x, y)) return [x, y];
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx, ny = y + dy, k = ny * map.W + nx;
+        if (!seen.has(k) && map.walkable(nx, ny)) { seen.add(k); q.push([nx, ny]); }
+      }
+    }
+    return null;
+  },
+  alarmT: 0,
+  alarm() { game.alarmT = 3; },
+  waterDays() {
+    const alive = game.family.filter((m) => !m.dead);
+    const perDay = alive.reduce((s, m) => s + m.lossRate(Math.max(sim.indoor, 90), 1) * 24, 0);
+    const carried = alive.flatMap((m) => m.inv).filter((e) => isLiquid(e) && PER_L[e.id]?.hydration >= 35).reduce((s, e) => s + e.left, 0);
+    return { liters: sim.tubL + carried, perDay, days: perDay > 0 ? (sim.tubL + carried) / perDay : Infinity };
+  },
 
   onDeath() {
     if (game.family.every((m) => m.dead)) {
@@ -217,9 +285,16 @@ const game = {
   },
 };
 const ui = new UI(game);
+game.rng = rng;
 
 // ---------------------------------------------------------------- selection + commands
 const rings = new Map();
+const marker = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.42, 24), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false, depthTest: false }));
+marker.rotation.x = -Math.PI / 2;
+marker.renderOrder = 5;
+marker.visible = false;
+marker.userData.t = 0;
+scene.add(marker);
 function select(m, add) {
   if (m.dead) return;
   if (add) {
@@ -228,9 +303,11 @@ function select(m, add) {
 }
 
 function commandMove(x, y) {
-  const group = game.selected.filter((m) => !m.dead);
+  const group = game.selected.filter((m) => m.canAct() && m.willObey());
   if (!group.length) return;
   const spots = nearbyWalkable(map, x, y, group.length);
+  marker.position.set(x + 0.5, 0.04, y + 0.5);
+  marker.userData.t = 1;
   if (!spots.length) return;
   group.forEach((m, k) => {
     const [sx, sy] = spots[k % spots.length];
@@ -240,7 +317,7 @@ function commandMove(x, y) {
 }
 
 function objectMenu(o, cx, cy) {
-  const group = game.selected.filter((m) => !m.dead);
+  const group = game.selected.filter((m) => m.canAct());
   const lead = group[0];
   if (!lead) { game.log('Pick someone first: click a family member or their card.', 'warn'); return; }
   const items = [];
@@ -257,12 +334,24 @@ function objectMenu(o, cx, cy) {
       const p = sim.pressure();
       items.push({ label: `Fill the tub (${who})`, disabled: p <= 0.001 || sim.tubL >= sim.TUB_MAX, hint: p <= 0.001 ? 'no pressure' : `${Math.round(sim.tubL)}/${sim.TUB_MAX} L`, fn: () => lead.useObject(o, 'fillTub') });
       for (const m of group) items.push({ label: `Drink from the tub (${m.name})`, disabled: sim.tubL < 1, fn: () => m.useObject(o, 'drinkTub') });
+      for (const m of group) items.push({ label: `Soak a towel and cool off (${m.name})`, hint: '2 L', disabled: sim.tubL < 2, fn: () => m.useObject(o, 'soak') });
       items.push({ label: `Fill containers from the tub (${who})`, disabled: sim.tubL < 0.5 || !lead.inv.some(refillable), hint: lead.inv.some(refillable) ? '' : 'carrying nothing to fill', fn: () => lead.useObject(o, 'fillCont') });
     } else items.push({ label: 'Bone dry. Whoever lived here didn\'t think to fill it.', disabled: true });
   } else if (o.kind === 'bed') {
     for (const m of group) items.push({ label: `Sleep (${m.name})`, hint: sim.indoor > 92 ? 'it\'s stifling in here' : '', fn: () => m.useObject(o, 'sleep') });
   }
+  for (const it of items) { const f = it.fn; if (f) it.fn = () => { const who = game.selected.find((m) => m.canAct()); if (!who || who.willObey()) f(); }; }
   ui.menu(cx, cy, items, o.name + (o.home || o.lot < 0 ? '' : ` · ${map.lots[o.lot].name}`));
+}
+
+function memberMenu(v, cx, cy) {
+  const helpers = game.selected.filter((m) => m !== v && m.canAct());
+  const items = [{ label: `Select ${v.name}`, disabled: v.dead, fn: () => select(v, false) }];
+  for (const h of helpers) {
+    items.push({ label: `${h.name}: pour water over ${v.name}`, hint: 'carried water, or the tub if close', disabled: v.dead, fn: () => h.tend(v, 'douse') });
+    if (v.collapsed) items.push({ label: `${h.name}: drag ${v.name} into the shade`, disabled: v.dead || h.mass < v.mass * 0.55, hint: h.mass < v.mass * 0.55 ? 'too heavy' : '', fn: () => h.tend(v, 'drag') });
+  }
+  ui.menu(cx, cy, items, `${v.name}: ${v.status()[0]}`);
 }
 
 // ---------------------------------------------------------------- input
@@ -272,7 +361,7 @@ let world;
 function pick(ev) {
   ndc.set((ev.clientX / innerWidth) * 2 - 1, -(ev.clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(ndc, camera);
-  const hits = ray.intersectObjects([...game.family.filter((m) => !m.dead).map((m) => m.hit), ...world.pickables], false);
+  const hits = ray.intersectObjects([...game.family.map((m) => m.hit), ...world.pickables], false);
   if (hits.length) {
     const u = hits[0].object.userData;
     if (u.member) return { member: u.member };
@@ -288,15 +377,23 @@ renderer.domElement.addEventListener('pointerdown', (ev) => {
   ui.hideMenu();
   const p = pick(ev);
   if (!p) return;
-  if (ev.button === 2) { if (p.cell) commandMove(...p.cell); else if (p.obj) objectMenu(p.obj, ev.clientX, ev.clientY); return; }
+  if (ev.button === 2) {
+    if (p.member) memberMenu(p.member, ev.clientX, ev.clientY);
+    else if (p.obj) objectMenu(p.obj, ev.clientX, ev.clientY);
+    else if (p.cell) commandMove(...p.cell);
+    return;
+  }
   if (ev.button !== 0) return;
-  if (p.member) select(p.member, ev.shiftKey);
-  else if (p.obj) objectMenu(p.obj, ev.clientX, ev.clientY);
-  else if (p.cell) commandMove(...p.cell);
+  if (p.member) {
+    const helpers = game.selected.filter((m) => m !== p.member && m.canAct());
+    if ((p.member.collapsed || p.member.dead) && helpers.length) memberMenu(p.member, ev.clientX, ev.clientY);
+    else select(p.member, ev.shiftKey);
+  } else if (p.obj) objectMenu(p.obj, ev.clientX, ev.clientY);
+  else if (p.cell && game.selected.length && !game.hintedMove) { game.hintedMove = true; game.log('To walk: right-click (two-finger tap) where you want them to go.'); }
 });
 renderer.domElement.addEventListener('wheel', (e) => {
   e.preventDefault();
-  cam.zoom = Math.min(3, Math.max(0.5, cam.zoom * (e.deltaY > 0 ? 0.9 : 1.1)));
+  cam.zoom = Math.min(4.5, Math.max(0.7, cam.zoom * (e.deltaY > 0 ? 0.9 : 1.1)));
   placeCamera();
 }, { passive: false });
 
@@ -308,8 +405,8 @@ addEventListener('keydown', (e) => {
   if (k === ' ') { e.preventDefault(); sim.speed = sim.speed ? 0 : (game.lastSpeed || 1); }
   if (sim.speed) game.lastSpeed = sim.speed;
   if (k === '1') sim.speed = 1;
-  if (k === '2') sim.speed = 3;
-  if (k === '3') sim.speed = 10;
+  if (k === '2') sim.speed = 4;
+  if (k === '3') sim.speed = 12;
   if (k === 'q') cam.yawGoal += Math.PI / 2;
   if (k === 'e') cam.yawGoal -= Math.PI / 2;
   if (k === 'r') { roofsOff = !roofsOff; }
@@ -321,11 +418,11 @@ addEventListener('keydown', (e) => {
     if (m) { select(m, false); game.focusOn(m); }
   }
   if (k === 'a' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); game.selected = game.family.filter((m) => !m.dead); }
-  if (k === 'z') for (const m of game.selected) if (!m.dead) { m.stopTask(true); m.goal = { type: 'sleep', obj: null }; m.startTask(); }
+  if (k === 'z') for (const m of game.selected) if (m.canAct()) { m.stopTask(true); m.goal = { type: 'sleep', obj: null }; m.startTask(); }
   if (k === 'f') game.focusOn(game.selected[0]);
   if (k === 'escape') { ui.hideMenu(); game.open = null; }
-  if (k === '+' || k === '=') { cam.zoom = Math.min(3, cam.zoom * 1.15); placeCamera(); }
-  if (k === '-') { cam.zoom = Math.max(0.5, cam.zoom / 1.15); placeCamera(); }
+  if (k === '+' || k === '=') { cam.zoom = Math.min(4.5, cam.zoom * 1.15); placeCamera(); }
+  if (k === '-') { cam.zoom = Math.max(0.7, cam.zoom / 1.15); placeCamera(); }
 });
 addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 let roofsOff = false;
@@ -375,13 +472,27 @@ function frame(now) {
   for (const m of game.family) {
     let r = rings.get(m);
     if (!r) {
-      r = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.52, 28), new THREE.MeshBasicMaterial({ color: 0xffc04d, transparent: true, opacity: 0.9, depthWrite: false }));
+      r = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.68, 32), new THREE.MeshBasicMaterial({ color: 0xffc04d, transparent: true, opacity: 0.95, depthWrite: false, depthTest: false }));
+      r.renderOrder = 5;
       r.rotation.x = -Math.PI / 2;
       scene.add(r);
       rings.set(m, r);
     }
     r.visible = game.selected.includes(m) && !m.dead;
-    r.position.set(m.pos.x, 0.03 + (m.asleep ? 0.55 : 0), m.pos.z);
+    r.position.set(m.pos.x, 0.03 + (m.asleep && m.bed ? 0.55 : 0), m.pos.z);
+    r.scale.setScalar(1 + 0.12 * Math.sin(now / 180));
+  }
+  if (marker.userData.t > 0) {
+    marker.userData.t = Math.max(0, marker.userData.t - dtReal * 0.8);
+    marker.visible = true;
+    marker.material.opacity = marker.userData.t;
+    marker.scale.setScalar(1.4 - 0.6 * marker.userData.t);
+  } else marker.visible = false;
+  {
+    const worst = game.family.reduce((w, m) => Math.max(w, m.dead ? 0 : m.collapsed ? 1 : m.bodyT >= 101.5 || m.pct > 4.5 ? 0.6 : m.pct > 2.5 ? 0.3 : 0), 0);
+    game.alarmT = Math.max(0, game.alarmT - dtReal);
+    const pulse = 0.55 + 0.45 * Math.sin(now / (worst >= 1 ? 220 : 500));
+    $('#danger').style.opacity = started ? String(Math.min(1, worst * pulse + game.alarmT * 0.3)) : '0';
   }
   if (game.open) {
     const { member: m, obj: o } = game.open;

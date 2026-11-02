@@ -4,28 +4,36 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { findPath } from './path.js';
 import { makeEntry, invKg } from './inventory.js';
 
+// walk: meters per real second at 1x. Space is compressed: crossing the block costs game minutes.
+// deficit: liters of body water already lost at the start (a hot night with the AC off at the end).
 export const FAMILY = [
-  { id: 'marcus', name: 'Marcus', age: 41, role: 'Dad', h: 1.8, color: 0x56677a, cap: 28, speed: 1.45,
-    at: [24, 7], start: ['car_keys', 'phone_dead'], needs: { hydration: 82, food: 70, energy: 55 } },
-  { id: 'elena', name: 'Elena', age: 38, role: 'Mom', h: 1.66, color: 0x8a5a4a, cap: 24, speed: 1.4,
-    at: [25, 8], start: ['water_bottle', 'bp_meds'], needs: { hydration: 80, food: 68, energy: 58 } },
-  { id: 'jess', name: 'Jess', age: 15, role: 'Daughter', h: 1.62, color: 0x5f7046, cap: 18, speed: 1.5,
-    at: [29, 11], start: ['phone_dead'], needs: { hydration: 76, food: 62, energy: 50 } },
-  { id: 'theo', name: 'Theo', age: 7, role: 'Son', h: 1.2, color: 0xb08a3a, cap: 8, speed: 1.15,
-    at: [25, 14], start: ['stuffed_animal'], needs: { hydration: 74, food: 60, energy: 62 } },
+  { id: 'marcus', name: 'Marcus', age: 41, role: 'Dad', h: 1.8, mass: 84, color: 0x56677a, cap: 28, speed: 2.6,
+    at: [24, 7], start: ['car_keys', 'phone_dead'], deficit: 0.6, needs: { food: 70, energy: 55, morale: 60 } },
+  { id: 'elena', name: 'Elena', age: 38, role: 'Mom', h: 1.66, mass: 64, color: 0x8a5a4a, cap: 24, speed: 2.5,
+    at: [25, 8], start: ['water_bottle', 'bp_meds'], deficit: 0.5, needs: { food: 68, energy: 58, morale: 62 } },
+  { id: 'jess', name: 'Jess', age: 15, role: 'Daughter', h: 1.62, mass: 52, color: 0x5f7046, cap: 18, speed: 2.7,
+    at: [29, 11], start: ['phone_dead'], deficit: 0.45, needs: { food: 62, energy: 50, morale: 45 } },
+  { id: 'theo', name: 'Theo', age: 7, role: 'Son', h: 1.2, mass: 24, color: 0xb08a3a, cap: 8, speed: 2.0,
+    at: [25, 14], start: ['stuffed_animal'], deficit: 0.2, needs: { food: 60, energy: 62, morale: 58 } },
 ];
 
 const clamp = (v, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, v));
+export const EXHAUSTION_F = 101.5, STROKE_F = 104.5, RECOVER_F = 102.5;
 
 export class Member {
   constructor(def, gltf, baseH, game) {
-    Object.assign(this, { id: def.id, name: def.name, age: def.age, role: def.role, cap: def.cap, walk: def.speed });
+    Object.assign(this, { id: def.id, name: def.name, age: def.age, role: def.role, cap: def.cap, walk: def.speed, mass: def.mass });
     this.def = def;
     this.game = game;
     this.child = def.age < 12;
-    this.needs = { hydration: 80, food: 70, energy: 60, health: 100, morale: 60, ...def.needs };
+    this.teen = def.age >= 13 && def.age < 18;
+    this.needs = { hydration: 100, food: 70, energy: 60, health: 100, morale: 60, ...def.needs };
+    this.deficit = def.deficit; // liters of body water lost
     this.bodyT = 98.6;
     this.felt = 80;
+    this.wetMin = 0;            // minutes of extra evaporative cooling from a soaked shirt/towel
+    this.collapsed = false;
+    this.draggedBy = null;
     this.inv = def.start.filter((id) => game.ITEMS[id]).map((id) => makeEntry(id));
     this.path = [];
     this.goal = null;
@@ -33,12 +41,13 @@ export class Member {
     this.asleep = false;
     this.dead = false;
     this.flags = {};
+    this.refusedAt = -1e9;
+    this.syncHydration();
 
     // body
     this.obj = new THREE.Group();
     const body = cloneSkinned(gltf.scene);
-    const s = def.h / baseH;
-    body.scale.setScalar(s);
+    body.scale.setScalar(def.h / baseH);
     const tint = new THREE.Color(def.color);
     body.traverse((m) => {
       if (!m.isMesh) return;
@@ -58,7 +67,7 @@ export class Member {
     this.play('idle');
 
     // invisible click target
-    this.hit = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, def.h, 8), new THREE.MeshBasicMaterial({ visible: false }));
+    this.hit = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, def.h, 8), new THREE.MeshBasicMaterial({ visible: false }));
     this.hit.position.y = def.h / 2;
     this.hit.userData.member = this;
     this.obj.add(this.hit);
@@ -71,7 +80,23 @@ export class Member {
   get pos() { return this.obj.position; }
   cell() { return [Math.floor(this.pos.x), Math.floor(this.pos.z)]; }
   kg() { return invKg(this.inv); }
-  busy() { return !!this.task || this.path.length > 0; }
+  get pct() { return (this.deficit / this.mass) * 100; } // % body mass lost as water
+  canAct() { return !this.dead && !this.collapsed && !this.draggedBy; }
+  syncHydration() { this.needs.hydration = clamp(100 - (this.pct / 8) * 100); }
+
+  // Liters (positive) drunk or lost (negative). Returns liters actually useful.
+  drink(l) {
+    const before = this.deficit;
+    this.deficit = Math.max(0, Math.min(this.mass * 0.12, this.deficit - l));
+    this.syncHydration();
+    return before - this.deficit;
+  }
+
+  // Fluid loss in L/h (Codex review 1 seed curve), scaled by body size.
+  lossRate(felt, act = 1) {
+    const size = Math.pow(this.mass / 80, 0.67);
+    return (0.08 + 0.0022 * Math.pow(Math.max(0, felt - 85), 1.5)) * act * size * (this.child ? 0.9 : 1);
+  }
 
   play(name, fade = 0.25) {
     const a = this.actions[name];
@@ -83,87 +108,145 @@ export class Member {
 
   stopTask(quiet = false) {
     if (this.asleep) this.wake(quiet);
+    if (this.task?.type === 'drag' && this.task.victim) this.task.victim.draggedBy = null;
     this.task = null;
     this.goal = null;
     this.path = [];
   }
 
-  // Walk to a cell. Returns false when there is no way there.
   moveTo(x, y, goal = null) {
-    if (this.dead) return false;
-    this.stopTask(true);
+    if (!this.canAct()) return false;
     const [cx, cy] = this.cell();
     const p = findPath(this.game.map, cx, cy, x, y);
     if (!p) return false;
+    this.stopTask(true);
     this.path = p;
     this.goal = goal;
     if (!p.length && goal) this.startTask();
     return true;
   }
 
-  // Walk to whichever standing spot next to an object is closest, then do `type` there.
-  useObject(obj, type, extra = {}) {
-    if (this.dead) return false;
+  // Walk to the closest standing spot among `cells`, then start goal.
+  approach(cells, goal, what) {
+    if (!this.canAct()) return false;
     const map = this.game.map;
     const [cx, cy] = this.cell();
     let best = null;
-    for (const [x, y] of map.useCells(obj)) {
-      if (x === cx && y === cy) { best = { p: [], x, y }; break; }
+    for (const [x, y] of cells) {
+      if (x === cx && y === cy) { best = { p: [] }; break; }
       const p = findPath(map, cx, cy, x, y);
-      if (p && (!best || p.length < best.p.length)) best = { p, x, y };
+      if (p && (!best || p.length < best.p.length)) best = { p };
     }
-    if (!best) { this.game.log(`${this.name} can't get to the ${obj.name.toLowerCase()}.`, 'warn'); return false; }
+    if (!best) { this.game.log(`${this.name} can't get to ${what}.`, 'warn'); return false; }
     this.stopTask(true);
     this.path = best.p;
-    this.goal = { type, obj, ...extra };
+    this.goal = goal;
     if (!best.p.length) this.startTask();
     return true;
+  }
+
+  useObject(obj, type, extra = {}) {
+    return this.approach(this.game.map.useCells(obj), { type, obj, ...extra }, `the ${obj.name.toLowerCase()}`);
+  }
+
+  // Go to another person and do something to them (douse, drag).
+  tend(victim, type, extra = {}) {
+    const [vx, vy] = victim.cell();
+    const map = this.game.map;
+    const cells = [[vx, vy], [vx + 1, vy], [vx - 1, vy], [vx, vy + 1], [vx, vy - 1]].filter(([x, y]) => map.walkable(x, y));
+    return this.approach(cells, { type, victim, ...extra }, victim.name);
   }
 
   startTask() {
     const g = this.goal;
     this.goal = null;
-    if (!g) return;
+    if (!g || !this.canAct()) return;
     const o = g.obj;
     if (o) this.faceTo(o.x + o.w / 2, o.y + o.h / 2);
-    const slow = this.child ? 1.5 : 1;
+    if (g.victim) this.faceTo(g.victim.pos.x, g.victim.pos.z);
+    const slow = (this.child ? 1.5 : 1) * (this.bodyT >= EXHAUSTION_F ? 1.4 : 1);
     const dur = {
-      search: (o?.home ? 8 : o?.car ? 15 : 20) * slow,
-      open: 0.5, drinkTap: 6, drinkTub: 4, fillCont: 6, fillTub: Infinity, sleep: Infinity,
+      search: (o?.home ? 4 : o?.car ? 6 : 8) * slow,
+      open: 0.3, drinkTap: 3, drinkTub: 2, fillCont: 4, soak: 5, douse: 3, fillTub: Infinity, sleep: Infinity, drag: Infinity,
     }[g.type] ?? 1;
+    if (g.type === 'fillTub') {
+      const other = this.game.family.find((m) => m !== this && m.task?.type === 'fillTub');
+      if (other) { this.game.log(`${other.name} is already running the tap.`); return; }
+      this.game.log(`${this.name} plugs the drain and opens the tap.`);
+    }
+    if (g.type === 'drag') {
+      const v = g.victim;
+      if (v.dead || !v.collapsed) return;
+      if (this.mass < v.mass * 0.55) { this.game.log(`${this.name} pulls at ${v.name}'s arm but can't move ${v.child ? 'him' : 'them'}.`, 'warn'); return; }
+      const dest = this.game.nearestShade(this.cell());
+      if (!dest) { this.game.log('Nowhere out of the sun to drag them.', 'warn'); return; }
+      const [cx, cy] = this.cell();
+      const p = findPath(this.game.map, cx, cy, dest[0], dest[1]);
+      if (!p) return;
+      v.draggedBy = this;
+      this.path = p;
+      this.task = { ...g, t: 0, dur };
+      if (!p.length) { this.finishDrag(); return; }
+      this.game.log(`${this.name} gets ${v.name} under the arms and drags ${v.child ? 'him' : 'them'} toward the shade.`, 'warn');
+      return;
+    }
     this.task = { ...g, t: 0, dur };
     if (g.type === 'sleep') this.lieDown(o);
-    if (g.type === 'fillTub') this.game.log(`${this.name} plugs the drain and opens the tap.`);
   }
 
   faceTo(x, z) { this.yaw = Math.atan2(x - this.pos.x, z - this.pos.z); }
 
+  layFlat(y) {
+    this.body.rotation.x = -Math.PI / 2;
+    this.body.position.y = 0.15;
+    this.pos.y = y;
+  }
+  standUp() {
+    this.body.rotation.x = 0;
+    this.body.position.y = 0;
+    this.pos.y = 0;
+  }
+
   lieDown(bed) {
     this.asleep = true;
     this.restAt = this.pos.clone();
-    if (bed) this.pos.set(bed.x + 0.5, 0.55, bed.y + 0.5);
-    else this.pos.y = 0.05;
-    this.body.rotation.x = -Math.PI / 2;
-    this.body.position.y = 0.15;
+    this.bed = bed || null;
+    if (bed) this.pos.set(bed.x + 0.5, 0, bed.y + 0.5);
+    this.layFlat(bed ? 0.55 : 0.05);
     this.play('idle');
   }
 
   wake(quiet) {
     if (!this.asleep) return;
     this.asleep = false;
-    this.body.rotation.x = 0;
-    this.body.position.y = 0;
     if (this.restAt) this.pos.copy(this.restAt);
-    this.pos.y = 0;
+    this.bed = null;
+    this.standUp();
     if (!quiet) this.game.log(`${this.name} is awake.`);
+  }
+
+  collapse() {
+    this.stopTask(true);
+    this.collapsed = true;
+    this.layFlat(0.05);
+    this.mixer.stopAllAction();
+    this.cur = null;
+    this.game.log(`${this.name} collapses. Heat stroke: hot dry skin, eyes rolling. ${this.child ? 'He' : 'They'} can't get up. Get ${this.child ? 'him' : 'them'} out of the heat and cool ${this.child ? 'him' : 'them'} down with water. Now.`, 'dead');
+    this.game.alarm();
+  }
+  revive() {
+    this.collapsed = false;
+    if (this.draggedBy) { this.draggedBy.stopTask(true); this.draggedBy = null; }
+    this.standUp();
+    this.play('idle');
+    this.game.log(`${this.name} comes around, shaking and nauseous. ${this.child ? 'He' : 'They'} need water and rest.`, 'warn');
   }
 
   die(cause) {
     this.dead = true;
     this.stopTask(true);
-    this.body.rotation.x = -Math.PI / 2;
-    this.body.position.y = 0.12;
-    this.pos.y = 0;
+    if (this.draggedBy) { this.draggedBy.stopTask(true); this.draggedBy = null; }
+    this.layFlat(0.05);
     this.mixer.stopAllAction();
     this.body.traverse((m) => { if (m.isMesh) m.material.color.multiplyScalar(0.45); });
     this.game.log(`${this.name} is dead. ${cause}`, 'dead');
@@ -174,11 +257,17 @@ export class Member {
   update(dtMin, dtReal) {
     if (this.dead) return;
     const sim = this.game.sim;
-    this.mixer.update(dtReal * Math.min(sim.speed, 2.5));
+    this.mixer.update(dtReal * Math.min(sim.speed, 2.5) * (this.walkAnimRate || 1));
 
-    // movement (walking speed scales with game speed)
-    if (this.path.length && sim.speed > 0) {
-      let dist = this.walk * dtReal * sim.speed * (this.flags.heatStroke ? 0.6 : 1);
+    if (this.draggedBy) {
+      const d = this.draggedBy;
+      const back = new THREE.Vector3(-Math.sin(d.yaw), 0, -Math.cos(d.yaw)).multiplyScalar(0.7);
+      this.pos.set(d.pos.x + back.x, 0.05, d.pos.z + back.z);
+      this.obj.rotation.y = d.obj.rotation.y + Math.PI;
+    } else if (this.path.length && sim.speed > 0 && this.canAct()) {
+      const sick = this.bodyT >= EXHAUSTION_F ? 0.7 : 1;
+      const dragging = this.task?.type === 'drag' ? 0.45 : 1;
+      let dist = this.walk * sick * dragging * dtReal * sim.speed;
       while (dist > 0 && this.path.length) {
         const [nx, ny] = this.path[0];
         const tx = nx + 0.5, tz = ny + 0.5;
@@ -192,12 +281,18 @@ export class Member {
         dist -= step;
         if (step >= d - 1e-4) this.path.shift();
       }
-      this.play(sim.speed >= 3 ? 'run' : 'walk');
-      if (!this.path.length && this.goal) this.startTask();
-    } else if (!this.asleep) {
+      const fast = this.walk * sick * dragging * sim.speed;
+      this.walkAnimRate = Math.min(1.8, (this.walk * sick * dragging) / 1.5);
+      this.play(fast > 6 ? 'run' : 'walk');
+      if (!this.path.length) {
+        if (this.task?.type === 'drag') this.finishDrag();
+        else if (this.goal) this.startTask();
+      }
+    } else if (!this.asleep && !this.collapsed) {
+      this.walkAnimRate = 1;
       this.play('idle');
     }
-    if (!this.asleep) {
+    if (!this.asleep && !this.collapsed && !this.draggedBy) {
       let dy = this.yaw - this.obj.rotation.y;
       dy = Math.atan2(Math.sin(dy), Math.cos(dy));
       this.obj.rotation.y += dy * Math.min(1, dtReal * 10);
@@ -208,9 +303,16 @@ export class Member {
     this.updateBody(dtMin);
   }
 
+  finishDrag() {
+    const v = this.task.victim;
+    this.task = null;
+    if (v) { v.draggedBy = null; v.pos.y = 0.05; }
+    this.game.log(`${this.name} gets ${v?.name} into the shade.`);
+  }
+
   updateTask(dtMin) {
     const t = this.task;
-    if (!t) return;
+    if (!t || t.type === 'drag') return;
     const g = this.game, sim = g.sim;
     t.t += dtMin;
     if (t.type === 'fillTub') {
@@ -234,18 +336,28 @@ export class Member {
       case 'search': g.searchDone(this, o); break;
       case 'open': g.openContainer(this, o); break;
       case 'drinkTap':
-        if (sim.pressure() > 0.05) { this.needs.hydration = 100; g.log(`${this.name} drinks from the tap until the water runs warm.`); }
+        if (sim.pressure() > 0.05) { const l = this.drink(this.deficit); g.log(`${this.name} drinks ${l.toFixed(1)} L from the tap until the water runs warm.`); }
         else g.log('The tap gurgles. Nothing comes out.', 'warn');
         break;
       case 'drinkTub': {
-        const want = Math.max(1, Math.ceil((100 - this.needs.hydration) / 35));
-        const l = Math.min(want, Math.floor(sim.tubL));
-        if (l < 1) { g.log('The tub is dry.', 'warn'); break; }
+        const max = this.child ? 0.5 : 1.2;
+        const l = Math.min(max, sim.tubL, Math.max(0.25, this.deficit));
+        if (l < 0.05) { g.log('The tub is dry.', 'warn'); break; }
         sim.tubL -= l;
-        this.needs.hydration = clamp(this.needs.hydration + l * 35);
-        g.log(`${this.name} drinks ${l} L from the tub. ${Math.round(sim.tubL)} L left.`);
+        this.drink(l);
+        g.log(`${this.name} drinks ${l.toFixed(1)} L from the tub. ${Math.round(sim.tubL)} L left.`);
         break;
       }
+      case 'soak': {
+        const l = Math.min(2, sim.tubL);
+        if (l < 0.5) { g.log('Not enough water left to waste on a towel.', 'warn'); break; }
+        sim.tubL -= l;
+        this.wetMin = 60;
+        this.bodyT = Math.max(98.6, this.bodyT - 0.5);
+        g.log(`${this.name} soaks a towel and a shirt in the tub (${l.toFixed(0)} L). It helps.`);
+        break;
+      }
+      case 'douse': g.douse(this, t.victim); break;
       case 'fillCont': g.fillContainers(this); break;
     }
   }
@@ -255,73 +367,120 @@ export class Member {
     const h = dtMin / 60;
     const [cx, cy] = this.cell();
     const indoor = map.isIndoor(cx, cy);
+    this.indoor = indoor;
     this.felt = indoor ? sim.indoor + (map.isGarage(cx, cy) ? 5 : 0) : sim.outdoor() + 14 * sim.sun();
     const working = this.task && !this.asleep;
-    const act = this.asleep ? 0.6 : this.path.length ? 1.4 : working ? 1.2 : 1;
-    const vul = this.child ? 1.3 : 1;
+    const act = this.collapsed || this.draggedBy ? 0.8 : this.asleep ? 0.6
+      : this.path.length ? (this.task?.type === 'drag' ? 2.2 : 1.4) : working ? 1.2 : 1;
 
-    // water: sweat climbs steeply above ~85°F felt
-    n.hydration -= (1.2 + Math.pow(Math.max(0, this.felt - 85), 1.5) * 0.07) * act * vul * h;
+    // ---- water
+    this.deficit = Math.min(this.mass * 0.12, this.deficit + this.lossRate(this.felt, act) * h);
+    this.syncHydration();
+    const pct = this.pct;
+
+    // ---- heat balance in watts: metabolism + environment - evaporation
+    const size = Math.pow(this.mass / 80, 0.67);
+    const area = 1.9 * size;
+    const M = 95 * Math.pow(this.mass / 80, 0.75) * act;
+    const E = 8 * (this.felt - 95) * area;
+    const sweatF = pct < 2 ? 1 : pct < 4 ? 0.8 : pct < 6 ? 0.5 : 0.25;
+    const S = 300 * area * sweatF * (this.child ? 0.85 : 1) + (this.wetMin > 0 ? 180 * area : 0);
+    const net = M + E - S;
+    const fPerWh = (1.8 * 3600) / (this.mass * 3500);
+    if (net > 0) this.bodyT += net * fPerWh * h;
+    else this.bodyT = Math.max(98.6, this.bodyT - Math.min(-net * fPerWh, this.wetMin > 0 ? 4 : 1.5) * h);
+    this.bodyT = Math.min(110, this.bodyT);
+    this.wetMin = Math.max(0, this.wetMin - dtMin);
+
+    // ---- other needs
     n.food -= 1.1 * act * h;
     if (this.asleep) {
       const q = this.felt > 95 ? 0.4 : this.felt > 88 ? 0.65 : 1; // nobody sleeps well at 95°F
       n.energy += 13 * q * h;
-    } else n.energy -= 3.2 * act * h;
-
-    // core temperature drifts toward what heat load, sweat and effort allow
-    const sweat = n.hydration > 30 ? 1 : n.hydration > 10 ? 0.55 : 0.2;
-    const load = Math.max(0, this.felt - 88);
-    const target = 98.6 + load * 0.11 * (2 - sweat) * vul + (act - 1) * 1.5;
-    this.bodyT += (target - this.bodyT) * Math.min(1, h * 1.2);
+    } else if (!this.collapsed) n.energy -= 3.2 * act * h;
 
     let dHealth = 0;
-    if (n.hydration < 15) dHealth -= (15 - n.hydration) * 0.4;
+    if (pct > 5) dHealth -= (pct - 5) * 12;
     if (n.food < 10) dHealth -= 1;
     if (n.energy < 5) dHealth -= 1;
-    if (this.bodyT > 103) dHealth -= (this.bodyT - 103) * 5;
-    if (!dHealth && n.hydration > 40 && n.food > 25 && this.bodyT < 100.5) dHealth = 0.6;
+    if (this.bodyT > 103) dHealth -= (this.bodyT - 103) * 6 * (this.bodyT > 106 ? 2 : 1);
+    if (!dHealth && pct < 2 && n.food > 25 && this.bodyT < 100.5) dHealth = 0.6;
     n.health += dHealth * h;
 
+    // spirit: heat and thirst grind everyone down; a scared kid alone is worse
     let dMorale = -0.4;
     if (this.felt > 95) dMorale -= (this.felt - 95) * 0.05;
-    if (n.hydration < 40) dMorale -= 1;
+    if (pct > 2) dMorale -= 1.2;
     if (n.food < 30) dMorale -= 0.6;
+    if (this.child && !this.collapsed) {
+      const adultNear = g.family.some((m) => m !== this && !m.dead && !m.child && !m.teen && m.pos.distanceTo(this.pos) < 6);
+      if (!adultNear) dMorale -= 5;
+      this.flags.alone = !adultNear;
+    }
     n.morale += dMorale * h;
 
+    // heat exhaustion: nausea
+    if (this.bodyT >= EXHAUSTION_F && !this.collapsed && g.rng.chance(0.3 * h)) {
+      this.drink(-(this.child ? 0.15 : 0.3));
+      n.food -= 5;
+      g.log(`${this.name} throws up${this.indoor ? '' : ' in the dirt'}. Losing water ${this.child ? 'he' : 'they'} can't spare.`, 'bad');
+    }
+
     for (const k of Object.keys(n)) n[k] = clamp(n[k]);
-    this.flags.heatStroke = this.bodyT >= 104;
+    if (!this.collapsed && this.bodyT >= STROKE_F) this.collapse();
+    else if (this.collapsed && this.bodyT < RECOVER_F) this.revive();
     this.alerts();
     if (n.health <= 0) {
-      const cause = this.bodyT >= 104 ? 'Heat stroke.' : n.hydration < 5 ? 'Dehydration.' : 'Their body gave out.';
+      const cause = this.bodyT >= 104 ? 'Heat stroke.' : pct > 5 ? 'Dehydration.' : 'Their body gave out.';
       this.die(cause);
     }
   }
 
   // One message each time a line is crossed; re-arms after recovery.
   alerts() {
-    const n = this.needs, f = this.flags, g = this.game;
+    const n = this.needs, f = this.flags, g = this.game, pct = this.pct;
     const say = (key, cond, reset, msg, kind = 'warn') => {
-      if (cond && !f[key]) { f[key] = true; g.log(msg, kind); }
-      else if (reset && f[key]) f[key] = false;
+      if (cond && !f['a_' + key]) { f['a_' + key] = true; g.log(msg, kind); }
+      else if (reset && f['a_' + key]) f['a_' + key] = false;
     };
     const kid = this.child;
-    say('thirsty', n.hydration < 45, n.hydration > 60, kid ? `Theo: "I'm thirsty. Can I have water?"` : `${this.name} is thirsty.`);
-    say('dehyd', n.hydration < 20, n.hydration > 35, `${this.name} is badly dehydrated: dizzy, no longer sweating much.`, 'bad');
-    say('hot', this.bodyT > 101.5, this.bodyT < 100.2, kid ? `Theo is flushed and listless. He's overheating.` : `${this.name} is overheating. Get them out of the heat.`, 'bad');
-    say('stroke', this.bodyT >= 104, this.bodyT < 102.5, `${this.name} has heat stroke: confused, skin hot and dry. They need to cool down now.`, 'bad');
+    say('thirsty', pct > 1.2, pct < 0.6, kid ? `Theo: "I'm thirsty. Can I have water?"` : this.teen ? `Jess: "Is there any water that isn't warm?"` : `${this.name} is thirsty.`);
+    say('dehyd', pct > 2.5, pct < 1.5, kid ? `Theo has stopped asking for water. He's quiet, lips cracked. That's worse.` : `${this.name} is dehydrated: headache, dark urine, slow.`, 'bad');
+    say('severe', pct > 4.5, pct < 3.5, `${this.name} is severely dehydrated: dizzy, confused, barely sweating.`, 'bad');
+    say('hot', this.bodyT >= EXHAUSTION_F, this.bodyT < 100.2, kid ? `Theo is flushed and limp. He's overheating, fast. Kids heat up quicker than adults.` : `${this.name} has heat exhaustion: pounding head, nausea, cramping.`, 'bad');
     say('hungry', n.food < 25, n.food > 40, kid ? `Theo: "My stomach hurts. When's breakfast?"` : `${this.name} is hungry.`);
     say('tired', n.energy < 20, n.energy > 40, `${this.name} can barely keep their eyes open.`);
+    if (kid) {
+      say('alone', f.alone && n.morale < 50, !f.alone, `Theo: "Mom? Dad? Where are you?" He doesn't like being alone in this.`);
+      say('crying', n.morale < 25, n.morale > 35, `Theo is crying and won't stop. Everyone can hear it.`, 'bad');
+    }
+    if (this.teen) say('sullen', n.morale < 35, n.morale > 45, `Jess has gone quiet and sharp. She's scared and angry about it.`);
+  }
+
+  // Teenagers push back when they're miserable; asking twice gets it done.
+  willObey() {
+    if (!this.teen || this.needs.morale >= 35) return true;
+    const now = this.game.sim.min;
+    if (now - this.refusedAt < 20) { this.game.log(`Jess: "Fine. FINE."`); this.refusedAt = -1e9; return true; }
+    if (this.game.rng.chance(0.5)) {
+      this.refusedAt = now;
+      this.game.log(this.game.rng.pick([`Jess: "Why is it always me?"`, `Jess: "Can someone else do it for once?"`, `Jess: "I'm not your servant." She doesn't move.`]), 'warn');
+      return false;
+    }
+    return true;
   }
 
   status() {
     if (this.dead) return ['Dead', 'dead'];
-    if (this.flags.heatStroke) return ['Heat stroke', 'bad'];
-    if (this.bodyT > 101.5) return ['Heat exhaustion', 'bad'];
-    if (this.needs.hydration < 20) return ['Severely dehydrated', 'bad'];
+    if (this.collapsed) return ['Collapsed: heat stroke', 'bad'];
+    if (this.bodyT >= EXHAUSTION_F) return ['Heat exhaustion', 'bad'];
+    if (this.pct > 4.5) return ['Severely dehydrated', 'bad'];
+    if (this.pct > 2.5) return ['Dehydrated', 'bad'];
     if (this.asleep) return ['Asleep', 'ok'];
-    if (this.needs.hydration < 45) return ['Thirsty', 'warn'];
+    if (this.pct > 1.2) return ['Thirsty', 'warn'];
     if (this.needs.food < 25) return ['Hungry', 'warn'];
     if (this.needs.energy < 20) return ['Exhausted', 'warn'];
+    if (this.child && this.needs.morale < 25) return ['Crying', 'warn'];
     if (this.needs.health < 50) return ['Unwell', 'warn'];
     return ['OK', 'ok'];
   }
@@ -329,15 +488,19 @@ export class Member {
   doing() {
     const t = this.task;
     if (this.dead) return '';
+    if (this.draggedBy) return `Being dragged by ${this.draggedBy.name}`;
+    if (this.collapsed) return 'Unconscious';
     if (t) {
       const o = t.obj ? t.obj.name.toLowerCase() : '';
       return {
         search: `Searching the ${o}`, open: `Opening the ${o}`, drinkTap: 'Drinking from the tap',
         drinkTub: 'Drinking from the tub', fillCont: 'Filling containers', fillTub: 'Filling the tub',
-        sleep: this.task.obj ? 'Sleeping' : 'Sleeping on the floor',
+        soak: 'Soaking a towel', douse: `Pouring water over ${t.victim?.name}`, drag: `Dragging ${t.victim?.name}`,
+        sleep: t.obj ? 'Sleeping' : 'Sleeping on the floor',
       }[t.type] || '';
     }
     if (this.path.length) return 'Walking';
+    if (this.wetMin > 0) return 'Wet towel on';
     return '';
   }
   progress() {
