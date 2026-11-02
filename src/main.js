@@ -1,0 +1,446 @@
+// Dry Season, grey box. Boot, render, input, and the game-level rules that tie map, sim and family together.
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { buildMap } from './map.js';
+import { buildWorld } from './build.js';
+import { Sim } from './sim.js';
+import { Member, FAMILY } from './family.js';
+import { nearbyWalkable } from './path.js';
+import { UI } from './ui.js';
+import { makeRng } from './rng.js';
+import {
+  ITEMS, PER_L, capOf, entryKg, invKg, isLiquid, refillable, addEntry, isSpoiled, rollLoot, label,
+} from './inventory.js';
+
+const $ = (s) => document.querySelector(s);
+const clamp = (v, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, v));
+
+// ---------------------------------------------------------------- renderer / scene
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+$('#app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const map = buildMap();
+const sim = new Sim();
+
+// isometric orthographic camera that orbits in 90° steps
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 400);
+const cam = { target: new THREE.Vector3(30, 0, 11), yaw: Math.PI / 4, yawGoal: Math.PI / 4, view: 30, zoom: 1 };
+function placeCamera() {
+  const d = 80;
+  camera.position.set(cam.target.x + Math.sin(cam.yaw) * d, d * 0.95, cam.target.z + Math.cos(cam.yaw) * d);
+  camera.lookAt(cam.target);
+  const aspect = innerWidth / innerHeight;
+  const hh = cam.view / cam.zoom / 2;
+  camera.left = -hh * aspect; camera.right = hh * aspect; camera.top = hh; camera.bottom = -hh;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); placeCamera(); });
+
+// lights: sun arcs east → south → west; moon is a dim blue fill
+const hemi = new THREE.HemisphereLight(0xd8e4f0, 0x8a6f50, 1);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff2dc, 3);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -38, right: 38, top: 38, bottom: -38, near: 1, far: 200 });
+sun.shadow.bias = -0.0006;
+sun.shadow.normalBias = 0.03;
+scene.add(sun, sun.target);
+const moon = new THREE.DirectionalLight(0x8fa6d8, 0.3);
+moon.position.set(map.W / 2 - 30, 50, map.H / 2 - 20);
+moon.target.position.set(map.W / 2, 0, map.H / 2);
+scene.add(moon, moon.target);
+
+const C = (h) => new THREE.Color(h);
+const SKY = { night: C(0x0a0e18), dawn: C(0xd99a6a), day: C(0xc8d3d8), haze: C(0xe1d2b4) };
+function updateLight() {
+  const s = sim.sun();
+  const a = sim.sunAngle();
+  const center = new THREE.Vector3(map.W / 2, 0, map.H / 2);
+  sun.position.set(center.x + Math.cos(a) * 60, 6 + Math.sin(Math.max(0, a)) * 70 * Math.max(s, 0.05), center.z + 25 * Math.max(0, Math.sin(a)));
+  sun.target.position.copy(center);
+  sun.intensity = 3.4 * Math.pow(s, 0.6);
+  sun.visible = s > 0.001;
+  const low = 1 - Math.min(1, s * 2.2);
+  sun.color.setHex(0xfff4e2).lerp(C(0xff9a50), low);
+  hemi.intensity = 0.2 + 1.05 * Math.min(1, s * 2.2);
+  hemi.color.setHex(0x2a3858).lerp(C(0xdde6ee), Math.min(1, s * 1.5));
+  moon.intensity = 0.45 * (1 - Math.min(1, s * 4));
+  const bg = SKY.night.clone();
+  if (s > 0) bg.copy(SKY.dawn).lerp(SKY.day, Math.min(1, s * 2.5)).lerp(SKY.haze, Math.max(0, s - 0.6));
+  scene.background = bg;
+}
+
+// ---------------------------------------------------------------- game object
+const rng = makeRng(Date.now() >>> 0);
+const game = {
+  scene, map, sim, ITEMS, family: [], selected: [], open: null, over: false, frames: 0,
+  objectives: [
+    { id: 'tub', text: 'Fill the bathtub while the taps still run' },
+    { id: 'look', text: 'Search the house for supplies' },
+    { id: 'night', text: 'Keep everyone alive until nightfall (8 PM)' },
+  ],
+  log: (t, k) => ui.log(t, k),
+  objective(id, state = 'done') {
+    const o = game.objectives.find((x) => x.id === id);
+    if (o && !o.done && !o.failed) { o[state] = true; if (state === 'done') game.log(`Done: ${o.text}.`, 'good'); }
+  },
+  setSpeed(s) { sim.speed = s; },
+  selectById(id, add) {
+    const m = game.family.find((x) => x.id === id);
+    if (m) select(m, add);
+  },
+  focusOn(m) { if (m) cam.target.set(m.pos.x, 0, m.pos.z); },
+
+  searchDone(m, o) {
+    if (!o.searched) {
+      o.searched = true;
+      o.items = rollLoot(o, rng, map.lots[o.lot]?.id);
+      game.log(o.items.length
+        ? `${m.name} goes through the ${o.name.toLowerCase()}: ${o.items.length} kind${o.items.length > 1 ? 's' : ''} of thing.`
+        : `${m.name} goes through the ${o.name.toLowerCase()}. Nothing worth taking.`);
+      if (o.home) game.objective('look');
+    }
+    game.openContainer(m, o);
+  },
+  openContainer(m, o) { game.open = { member: m, obj: o }; select(m, false); },
+
+  fillContainers(m) {
+    let filled = 0;
+    for (const e of m.inv) {
+      if (!refillable(e)) continue;
+      const room = capOf(e.id) - e.left;
+      const l = Math.min(room, sim.tubL, (m.cap - m.kg()));
+      if (l <= 0) continue;
+      e.left += l; sim.tubL -= l; filled += l;
+    }
+    game.log(filled > 0 ? `${m.name} fills containers from the tub: ${filled.toFixed(1)} L.` : `${m.name} has nothing to fill, or can't carry more.`);
+  },
+
+  // ---- inventory actions
+  near(a, b, r = 2.6) { return a === b || a.pos.distanceTo(b.pos) <= r; },
+  itemMenu(m, i, x, y) {
+    const e = m.inv[i];
+    if (!e) return;
+    const it = ITEMS[e.id];
+    const items = [];
+    const others = game.family.filter((o) => o !== m && !o.dead);
+    const consumable = it.use || PER_L[e.id];
+    if (consumable) {
+      const verb = isLiquid(e) ? 'Drink 1 L' : it.cat === 'water' ? 'Drink' : it.cat === 'food' ? 'Eat' : 'Use';
+      const empty = isLiquid(e) && e.left < 0.05;
+      items.push({ label: `${verb} (${m.name})`, disabled: empty, fn: () => game.useItem(m, i, m) });
+      for (const o of others) {
+        const ok = game.near(m, o);
+        items.push({ label: `${verb.replace('Drink', 'Give a drink').replace('Eat', 'Feed').replace('Use', 'Use on')} → ${o.name}`,
+          hint: ok ? '' : 'too far away', disabled: !ok || empty, fn: () => game.useItem(m, i, o) });
+      }
+    }
+    for (const o of others) {
+      const ok = game.near(m, o);
+      items.push({ label: `Hand to ${o.name}`, hint: ok ? '' : 'too far away', disabled: !ok, fn: () => game.give(m, i, o) });
+    }
+    if (game.open && game.open.member === m) items.push({ label: `Put in ${game.open.obj.name.toLowerCase()}`, fn: () => game.put(m, game.open.obj, i) });
+    ui.menu(x, y, items, label(e, sim));
+  },
+
+  useItem(owner, i, target) {
+    const e = owner.inv[i];
+    if (!e || target.dead) return;
+    const it = ITEMS[e.id];
+    const tags = it.tags || [];
+    const hasTool = (ids) => [owner, target].some((p) => p.inv.some((x) => ids.includes(x.id)));
+    if (tags.includes('needsCooking')) { game.log(`${it.name} needs cooking. No power, no stove. You'd need propane or charcoal and a grill.`, 'warn'); return; }
+    if (tags.includes('needsOpener') && !hasTool(['can_opener', 'multitool', 'pocket_knife', 'kitchen_knife'])) {
+      game.log(`${owner.name} can't get the can open. Need a can opener, or at least a knife.`, 'warn'); return;
+    }
+    const n = target.needs;
+    if (isLiquid(e)) {
+      const l = Math.min(1, e.left);
+      if (l < 0.05) return;
+      for (const [k, v] of Object.entries(PER_L[e.id])) n[k] = clamp(n[k] + v * l);
+      e.left = Math.max(0, e.left - l);
+      if (!['water_gallon', 'water_gallon_half', 'water_cooler_jug', 'bucket_5gal', 'cooler'].includes(e.id) && e.left < 0.05) owner.inv.splice(i, 1);
+      game.log(`${target.name} drinks ${l.toFixed(1)} L of ${it.name.toLowerCase()}.`);
+      return;
+    }
+    const spoiled = isSpoiled(e, sim);
+    for (const [k, v] of Object.entries(it.use || {})) n[k] = clamp(n[k] + v);
+    if (spoiled) { n.health = clamp(n.health - 12); n.morale = clamp(n.morale - 6); }
+    e.n -= 1;
+    if (e.n <= 0) owner.inv.splice(i, 1);
+    const who = target === owner ? target.name : `${owner.name} gives ${target.name}`;
+    game.log(spoiled ? `${who} ${target === owner ? 'eats' : ''} the ${it.name.toLowerCase()} anyway. It had turned. Stomach cramps follow.`
+      : `${who}: ${it.name.toLowerCase()}.`, spoiled ? 'bad' : '');
+  },
+
+  moveEntry(fromInv, i, toInv, all, capKg, who) {
+    const e = fromInv[i];
+    if (!e) return false;
+    const unit = isLiquid(e) ? entryKg(e) : ITEMS[e.id].kg;
+    const room = capKg === Infinity ? Infinity : capKg - invKg(toInv);
+    if (isLiquid(e) || e.n === 1 || !all) {
+      if (unit > room + 1e-6) { game.log(`${who} can't carry that. Too heavy.`, 'warn'); return false; }
+      if (isLiquid(e) || e.n === 1) { fromInv.splice(i, 1); addEntry(toInv, e); }
+      else { e.n -= 1; addEntry(toInv, { id: e.id, n: 1 }); }
+      return true;
+    }
+    const k = Math.min(e.n, Math.floor((room + 1e-6) / unit));
+    if (k <= 0) { game.log(`${who} can't carry that. Too heavy.`, 'warn'); return false; }
+    e.n -= k;
+    addEntry(toInv, { id: e.id, n: k });
+    if (e.n <= 0) fromInv.splice(i, 1);
+    return true;
+  },
+  take(m, o, i, one) { game.moveEntry(o.items, i, m.inv, !one, m.cap, m.name); },
+  takeAll(m, o) {
+    for (let i = o.items.length - 1; i >= 0; i--) game.moveEntry(o.items, i, m.inv, true, m.cap, m.name);
+  },
+  put(m, o, i) { game.moveEntry(m.inv, i, o.items, true, Infinity, m.name); },
+  give(m, i, o) { if (game.moveEntry(m.inv, i, o.inv, true, o.cap, o.name)) game.log(`${m.name} hands ${o.name} the ${ITEMS[(o.inv.at(-1) || {}).id]?.name.toLowerCase() || 'item'}.`); },
+
+  onDeath() {
+    if (game.family.every((m) => m.dead)) {
+      game.over = true;
+      sim.speed = 0;
+      $('#over').classList.remove('hidden');
+      $('#over p').textContent = `Day ${sim.day}, ${sim.clock()}. Nobody is left in the house on this street.`;
+    }
+    game.objective('night', 'failed');
+  },
+};
+const ui = new UI(game);
+
+// ---------------------------------------------------------------- selection + commands
+const rings = new Map();
+function select(m, add) {
+  if (m.dead) return;
+  if (add) {
+    game.selected = game.selected.includes(m) ? game.selected.filter((x) => x !== m) : [...game.selected, m];
+  } else game.selected = [m];
+}
+
+function commandMove(x, y) {
+  const group = game.selected.filter((m) => !m.dead);
+  if (!group.length) return;
+  const spots = nearbyWalkable(map, x, y, group.length);
+  if (!spots.length) return;
+  group.forEach((m, k) => {
+    const [sx, sy] = spots[k % spots.length];
+    if (!m.moveTo(sx, sy)) game.log(`${m.name} can't find a way there.`, 'warn');
+  });
+  if (game.open && group.includes(game.open.member)) game.open = null;
+}
+
+function objectMenu(o, cx, cy) {
+  const group = game.selected.filter((m) => !m.dead);
+  const lead = group[0];
+  if (!lead) { game.log('Pick someone first: click a family member or their card.', 'warn'); return; }
+  const items = [];
+  const who = group.length > 1 ? `${lead.name}` : lead.name;
+  if (o.kind === 'container') {
+    items.push(o.searched
+      ? { label: `Open (${who})`, fn: () => lead.useObject(o, 'open') }
+      : { label: `Search (${who})`, hint: o.home ? '' : 'someone else\'s things', fn: () => lead.useObject(o, 'search') });
+  } else if (o.kind === 'sink') {
+    const p = sim.pressure();
+    for (const m of group) items.push({ label: `Drink from the tap (${m.name})`, disabled: p <= 0.05, hint: p <= 0.05 ? 'dry' : '', fn: () => m.useObject(o, 'drinkTap') });
+  } else if (o.kind === 'tub') {
+    if (o.home) {
+      const p = sim.pressure();
+      items.push({ label: `Fill the tub (${who})`, disabled: p <= 0.001 || sim.tubL >= sim.TUB_MAX, hint: p <= 0.001 ? 'no pressure' : `${Math.round(sim.tubL)}/${sim.TUB_MAX} L`, fn: () => lead.useObject(o, 'fillTub') });
+      for (const m of group) items.push({ label: `Drink from the tub (${m.name})`, disabled: sim.tubL < 1, fn: () => m.useObject(o, 'drinkTub') });
+      items.push({ label: `Fill containers from the tub (${who})`, disabled: sim.tubL < 0.5 || !lead.inv.some(refillable), hint: lead.inv.some(refillable) ? '' : 'carrying nothing to fill', fn: () => lead.useObject(o, 'fillCont') });
+    } else items.push({ label: 'Bone dry. Whoever lived here didn\'t think to fill it.', disabled: true });
+  } else if (o.kind === 'bed') {
+    for (const m of group) items.push({ label: `Sleep (${m.name})`, hint: sim.indoor > 92 ? 'it\'s stifling in here' : '', fn: () => m.useObject(o, 'sleep') });
+  }
+  ui.menu(cx, cy, items, o.name + (o.home || o.lot < 0 ? '' : ` · ${map.lots[o.lot].name}`));
+}
+
+// ---------------------------------------------------------------- input
+const ray = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+let world;
+function pick(ev) {
+  ndc.set((ev.clientX / innerWidth) * 2 - 1, -(ev.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const hits = ray.intersectObjects([...game.family.filter((m) => !m.dead).map((m) => m.hit), ...world.pickables], false);
+  if (hits.length) {
+    const u = hits[0].object.userData;
+    if (u.member) return { member: u.member };
+    if (u.obj) return { obj: u.obj };
+  }
+  const g = ray.intersectObject(world.pickPlane, false)[0];
+  if (g) return { cell: [Math.floor(g.point.x), Math.floor(g.point.z)] };
+  return null;
+}
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+renderer.domElement.addEventListener('pointerdown', (ev) => {
+  if (game.over || !started) return;
+  ui.hideMenu();
+  const p = pick(ev);
+  if (!p) return;
+  if (ev.button === 2) { if (p.cell) commandMove(...p.cell); else if (p.obj) objectMenu(p.obj, ev.clientX, ev.clientY); return; }
+  if (ev.button !== 0) return;
+  if (p.member) select(p.member, ev.shiftKey);
+  else if (p.obj) objectMenu(p.obj, ev.clientX, ev.clientY);
+  else if (p.cell) commandMove(...p.cell);
+});
+renderer.domElement.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  cam.zoom = Math.min(3, Math.max(0.5, cam.zoom * (e.deltaY > 0 ? 0.9 : 1.1)));
+  placeCamera();
+}, { passive: false });
+
+const keys = new Set();
+addEventListener('keydown', (e) => {
+  if (!started) return;
+  keys.add(e.key.toLowerCase());
+  const k = e.key.toLowerCase();
+  if (k === ' ') { e.preventDefault(); sim.speed = sim.speed ? 0 : (game.lastSpeed || 1); }
+  if (sim.speed) game.lastSpeed = sim.speed;
+  if (k === '1') sim.speed = 1;
+  if (k === '2') sim.speed = 3;
+  if (k === '3') sim.speed = 10;
+  if (k === 'q') cam.yawGoal += Math.PI / 2;
+  if (k === 'e') cam.yawGoal -= Math.PI / 2;
+  if (k === 'r') { roofsOff = !roofsOff; }
+  if (k === 'tab') {
+    e.preventDefault();
+    const alive = game.family.filter((m) => !m.dead);
+    const i = alive.indexOf(game.selected[0]);
+    const m = alive[(i + 1) % alive.length];
+    if (m) { select(m, false); game.focusOn(m); }
+  }
+  if (k === 'a' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); game.selected = game.family.filter((m) => !m.dead); }
+  if (k === 'z') for (const m of game.selected) if (!m.dead) { m.stopTask(true); m.goal = { type: 'sleep', obj: null }; m.startTask(); }
+  if (k === 'f') game.focusOn(game.selected[0]);
+  if (k === 'escape') { ui.hideMenu(); game.open = null; }
+  if (k === '+' || k === '=') { cam.zoom = Math.min(3, cam.zoom * 1.15); placeCamera(); }
+  if (k === '-') { cam.zoom = Math.max(0.5, cam.zoom / 1.15); placeCamera(); }
+});
+addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+let roofsOff = false;
+
+// ---------------------------------------------------------------- loop
+let started = false, last = performance.now(), uiAcc = 0;
+function frame(now) {
+  const dtReal = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  game.frames++;
+
+  // camera pan (relative to view) and smooth 90° rotation
+  const pan = 18 * dtReal / cam.zoom;
+  const fx = -Math.sin(cam.yaw), fz = -Math.cos(cam.yaw);
+  const rx = Math.cos(cam.yaw), rz = -Math.sin(cam.yaw);
+  if (!keys.has('control')) {
+    if (keys.has('w') || keys.has('arrowup')) { cam.target.x += fx * pan; cam.target.z += fz * pan; }
+    if (keys.has('s') || keys.has('arrowdown')) { cam.target.x -= fx * pan; cam.target.z -= fz * pan; }
+    if (keys.has('d') || keys.has('arrowright')) { cam.target.x += rx * pan; cam.target.z += rz * pan; }
+    if (keys.has('a') || keys.has('arrowleft')) { cam.target.x -= rx * pan; cam.target.z -= rz * pan; }
+  }
+  cam.target.x = Math.max(-5, Math.min(map.W + 5, cam.target.x));
+  cam.target.z = Math.max(-5, Math.min(map.H + 5, cam.target.z));
+  cam.yaw += (cam.yawGoal - cam.yaw) * Math.min(1, dtReal * 8);
+  placeCamera();
+
+  if (started && !game.over) {
+    const dtMin = dtReal * sim.speed; // 1 real second = 1 game minute at 1x
+    // sub-step the body sim at high speed so thresholds aren't skipped
+    const steps = Math.max(1, Math.ceil(dtMin / 2));
+    for (let s = 0; s < steps; s++) {
+      sim.step(dtMin / steps);
+      for (const m of game.family) m.update(dtMin / steps, dtReal / steps);
+    }
+    rules();
+  }
+
+  // cut away the upper walls + roof of any house with family inside
+  map.lots.forEach((lot, i) => {
+    const inside = game.family.some((m) => !m.dead && map.houseOf(...m.cell()) === i);
+    world.lots[i].upper.visible = !(roofsOff || inside);
+  });
+  if (map.tub.water) {
+    map.tub.water.visible = sim.tubL > 0.5;
+    map.tub.water.material.opacity = 0.35 + 0.6 * (sim.tubL / sim.TUB_MAX);
+  }
+  for (const m of game.family) {
+    let r = rings.get(m);
+    if (!r) {
+      r = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.52, 28), new THREE.MeshBasicMaterial({ color: 0xffc04d, transparent: true, opacity: 0.9, depthWrite: false }));
+      r.rotation.x = -Math.PI / 2;
+      scene.add(r);
+      rings.set(m, r);
+    }
+    r.visible = game.selected.includes(m) && !m.dead;
+    r.position.set(m.pos.x, 0.03 + (m.asleep ? 0.55 : 0), m.pos.z);
+  }
+  if (game.open) {
+    const { member: m, obj: o } = game.open;
+    const d = Math.min(...map.objCells(o).map(([x, y]) => Math.hypot(x + 0.5 - m.pos.x, y + 0.5 - m.pos.z)));
+    if (d > 1.9 || m.dead) game.open = null;
+  }
+
+  updateLight();
+  renderer.render(scene, camera);
+  if (started) {
+    ui.tagsUpdate(camera, renderer);
+    uiAcc += dtReal;
+    if (uiAcc > 0.2) { uiAcc = 0; ui.refresh(); }
+  }
+  requestAnimationFrame(frame);
+}
+
+// Story beats and objective checks.
+function rules() {
+  if (sim.tubL >= 100) game.objective('tub');
+  if (sim.pressure() <= 0 && sim.tubL < 100) game.objective('tub', 'failed');
+  if (!game.beat1 && sim.min >= 7 * 60 + 2) { game.beat1 = true; game.log('The tap pressure is dropping. Without power the city pumps can\'t keep the lines full.', 'warn'); }
+  if (!game.beat2 && sim.min >= 10 * 60) { game.beat2 = true; game.log('Ten o\'clock and already over a hundred. A dog has been barking two houses down since dawn.'); }
+  if (!game.beat3 && sim.min >= 13 * 60) { game.beat3 = true; game.log('No cars on the street. No planes overhead. Just the heat ticking in the roof.'); }
+  if (!game.beat4 && sim.min >= 16 * 60 + 30) { game.beat4 = true; game.log('Peak heat. Anyone out in the sun right now is in real danger.', 'bad'); }
+  if (!game.beatN && sim.min >= 20 * 60) {
+    game.beatN = true;
+    if (game.family.every((m) => !m.dead)) { game.objective('night'); game.log('Night. The sun is down, but the walls and the pavement give the heat back for hours.'); }
+  }
+}
+
+// ---------------------------------------------------------------- boot
+const loader = new GLTFLoader();
+loader.load('assets/models/Xbot.glb', (gltf) => {
+  world = buildWorld(scene, map);
+  const box = new THREE.Box3().setFromObject(gltf.scene);
+  const baseH = box.max.y - box.min.y;
+  for (const def of FAMILY) game.family.push(new Member(def, gltf, baseH, game));
+  game.selected = [game.family[0]];
+  placeCamera();
+  updateLight();
+  $('#loading').classList.add('hidden');
+  $('#begin').disabled = false;
+  $('#begin').textContent = 'Begin';
+  requestAnimationFrame(frame);
+}, undefined, (err) => {
+  $('#loading').textContent = 'Failed to load the character model: ' + (err?.message || err);
+});
+
+$('#begin').addEventListener('click', () => {
+  $('#intro').classList.add('hidden');
+  $('#hud').classList.remove('hidden');
+  started = true;
+  last = performance.now();
+  game.log('Day 1. The power went out at 5:40 AM across the whole valley. The AC is silent.', 'warn');
+  game.log('Water still comes out of the taps, for now. Fill the bathtub.', 'warn');
+  ui.refresh();
+});
+$('#restart').addEventListener('click', () => location.reload());
+
+window.__game = game; // test hook
+void label;

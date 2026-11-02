@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dry Season (grey box)</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="hud" class="hidden">
+  <div id="top">
+    <div id="clock"></div>
+    <div id="speed">
+      <button data-s="0" title="Pause (Space)">❚❚</button>
+      <button data-s="1" title="Normal (1)">▶</button>
+      <button data-s="3" title="Fast (2)">▶▶</button>
+      <button data-s="10" title="Faster (3)">▶▶▶</button>
+    </div>
+    <div id="env"></div>
+  </div>
+  <div id="objectives"></div>
+  <div id="family"></div>
+  <div id="side"><div id="inv"></div><div id="cont"></div></div>
+  <div id="log"></div>
+  <div id="help">
+    <b>Click</b> a person or card to select · <b>Shift</b> adds · <b>Ctrl+A</b> everyone · <b>Tab</b> next<br>
+    <b>Click ground</b> walk there · <b>click furniture</b> for actions · <b>click an item</b> to use, feed, hand over<br>
+    <b>WASD</b> pan · <b>Q/E</b> rotate · <b>wheel</b> zoom · <b>R</b> roofs · <b>Z</b> sleep where standing · <b>Space</b> pause · <b>1/2/3</b> speed
+  </div>
+</div>
+
+<div id="tags"></div>
+<div id="menu" class="hidden"></div>
+
+<div id="intro">
+  <div class="box">
+    <h1>DRY SEASON</h1>
+    <div class="sub">grey box · build 0</div>
+    <p>Phoenix. The second week of July.</p>
+    <p>At 5:40 this morning the grid went down across the valley. Nobody knows why yet, and nobody is saying when it comes back.
+      It's already 91 degrees. By afternoon it will be 115.</p>
+    <p>Water still trickles from the taps, but without power the pumps can't keep the lines full. It won't last the morning.</p>
+    <p>You are responsible for all four of them: Marcus, Elena, Jess, and Theo. Keep them alive.</p>
+    <button id="begin" disabled>Loading…</button>
+    <div class="fine">Placeholder mannequins and box furniture. This build tests the camera, the heat, and the family.</div>
+  </div>
+</div>
+<div id="loading">Loading…</div>
+<div id="over" class="hidden"><div class="box"><h1>The house is quiet.</h1><p></p><button id="restart">Start over</button></div></div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
