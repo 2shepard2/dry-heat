@@ -1,4 +1,4 @@
-// Dry Season item and loot data. Plain data, no imports.
+// Dry Heat item and loot data. Plain data, no imports.
 // Stats are 0-100 (100 = fine). `use` holds deltas applied to the person using the item.
 // spoilsH = hours until spoiled at ~100F without refrigeration. Omit = shelf-stable.
 

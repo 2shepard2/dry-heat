@@ -1,10 +1,10 @@
-# Dry Season
+# Dry Heat
 
 Gritty, grounded isometric survival sim. Phoenix-area suburb, July, the grid is down.
 You keep a family of four alive: personal care, inventory, relationships, base building.
 No magic, no zombies.
 
-**Status: grey box (build 2).** Tests the camera, heat/water/body sim, family control, and searching.
+**Status: grey box (build 2). Our Game Off 2026 entry (theme SHIFT, due Dec 1): see `JAM.md`.** Tests the camera, heat/water/body sim, family control, and searching.
 
 - Plain ES modules + Three.js r187 (vendored in `vendor/three`, MIT). No build step.
 - Placeholder character: `assets/models/Xbot.glb` from the three.js examples (Mixamo-derived).

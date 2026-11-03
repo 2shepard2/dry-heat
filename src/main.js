@@ -1,4 +1,4 @@
-// Dry Season, grey box. Boot, render, input, and the game-level rules that tie map, sim and family together.
+// Dry Heat, grey box. Boot, render, input, and the game-level rules that tie map, sim and family together.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { buildMap } from './map.js';
