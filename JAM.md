@@ -8,6 +8,7 @@ Jam page: https://itch.io/jam/game-off-2026
 - **Submit on itch.io AND have final code pushed to the public GitHub repo by Dec 1, 2026, 13:37 PST.**
   Pushing to GitHub does not submit the entry.
 - Voting runs until Jan 1, 2027, 13:37 PST. Categories: Overall, Gameplay, Graphics, Audio, Innovation, Theme.
+- **itch page is staged as a draft (2026-11-02). Publish it and submit it to the jam by Sun Nov 22** with whatever build exists. Later builds are just uploads. itch requires the page to be published before it can be submitted.
 - Our internal cutoff is **Nov 29**. That leaves two days for packaging, the itch page, and anything that breaks.
 
 ## Rules that matter to us
