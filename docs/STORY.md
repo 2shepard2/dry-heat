@@ -145,8 +145,8 @@ Fields: `id`, `phase` (`prologue` | `outage`), `day`, `at` (clock minute), `trig
 
 ---
 
-## Decisions Daniel needs to make
+## Decided (Daniel, 2026-11-02)
 
-1. **Ending scope.** A only (grid returns), A plus B (add the cooling centre walk), or all three. This sets the engineering load for weeks 3 and 4.
-2. **How much of the marriage is shown.** Does Marcus's lost job get revealed (the confession), or does it stay unspoken? That decides whether trust has a payoff scene or is just a quiet mechanic.
-3. **Whether anyone can die.** The doc assumes a death is possible (Theo's asthma, Elena's meds) and treats it as ending D. If Daniel prefers that the family never dies on screen, the stakes need to be injuries and lost relationships instead.
+1. **Endings:** A (the grid returns) is the baseline. B (the cooling centre walk) is a stretch goal for week 3. C (Flagstaff) is mentioned in dialogue only. D (partial) is a variation of A and B.
+2. **Marriage:** the confession is in: day 6, gated on trust, with the letter on day 8 as the fallback.
+3. **Death is possible.** A death doesn't end the game. The survivors carry on to the ending, and its text reflects the loss.
