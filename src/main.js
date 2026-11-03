@@ -1,6 +1,6 @@
 // Dry Heat, grey box. Boot, render, input, and the game-level rules that tie map, sim and family together.
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { makeFigure } from './figure.js';
 import { buildMap } from './map.js';
 import { buildWorld } from './build.js';
 import { Sim } from './sim.js';
@@ -676,12 +676,12 @@ function rules() {
 }
 
 // ---------------------------------------------------------------- boot
-const loader = new GLTFLoader();
-loader.load('assets/models/Xbot.glb', (gltf) => {
+{
+  const fig = makeFigure();
   world = buildWorld(scene, map);
-  const box = new THREE.Box3().setFromObject(gltf.scene);
+  const box = new THREE.Box3().setFromObject(fig.scene);
   const baseH = box.max.y - box.min.y;
-  for (const def of FAMILY) game.family.push(new Member(def, gltf, baseH, game));
+  for (const def of FAMILY) game.family.push(new Member(def, fig, baseH, game));
   game.selected = [game.family[0]];
   placeCamera();
   updateLight();
@@ -689,9 +689,7 @@ loader.load('assets/models/Xbot.glb', (gltf) => {
   $('#begin').disabled = false;
   $('#begin').textContent = 'Begin';
   requestAnimationFrame(frame);
-}, undefined, (err) => {
-  $('#loading').textContent = 'Failed to load the character model: ' + (err?.message || err);
-});
+}
 
 $('#begin').addEventListener('click', () => {
   $('#intro').classList.add('hidden');

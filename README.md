@@ -7,14 +7,13 @@ No magic, no zombies.
 **Status: grey box (build 2). Our Game Off 2026 entry (theme SHIFT, due Dec 1): see `JAM.md`.** Tests the camera, heat/water/body sim, family control, and searching.
 
 - Plain ES modules + Three.js r187 (vendored in `vendor/three`, MIT). No build step.
-- Placeholder character: `assets/models/Xbot.glb` from the three.js examples (Mixamo-derived).
-  Internal testing only; replace before anything public.
+- People are our own jointed low-poly figures built in code (`src/figure.js`), with idle/walk/run clips.
 - Item and loot data: `src/data/items.js`.
 
 ## Run
 
     node tools/smoke.mjs <outDir>                                  # headless check + screenshots
-    /opt/claude/projects/jam-kit/tools/preview.sh . 7923           # http://192.168.1.76:7923/
+    python3 -m http.server 8000                                    # then open http://localhost:8000/
 
 ## Map of the code
 

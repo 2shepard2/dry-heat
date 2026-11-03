@@ -62,6 +62,7 @@ export class Member {
       m.castShadow = true;
       m.frustumCulled = false;
       m.material = m.material.clone();
+      if (/Skin/i.test(m.material.name)) { if (def.skin) m.material.color.set(def.skin); return; }
       const joints = /Joints/i.test(m.material.name);
       m.material.color = joints ? tint.clone().multiplyScalar(0.45) : tint.clone();
       if (m.material.metalness !== undefined) { m.material.metalness = 0.1; m.material.roughness = 0.85; }
