@@ -28,6 +28,31 @@ Jam page: https://itch.io/jam/game-off-2026
 - [x] Daniel joined the jam on itch.io (2026-11-02).
 - [ ] LICENSE (Daniel's call). Until then the code is all rights reserved by default.
 
+## Team and workflow (Daniel, 2026-11-02)
+
+- **Claude conducts.** Claude designs and writes briefs, reviews, merges, publishes, and talks with Daniel.
+  Claude writes code only for glue, shared data formats, and fixes too small to delegate.
+- **Codex builds systems** (simulation, AI, mechanics, UI logic), using model `sol`.
+  **MiniMax does bulk work:** content data, writing, asset sourcing with licence records, and map lots.
+- Workers push `mission/<id>` branches to **private `hester-lab/dry-heat-work`**. Under Daniel's standing grant
+  this is scope `own`, so no approval is needed (Mission Room README "Approvals"). Workers never push to
+  `hester-lab/dry-heat`. It mirrors to public GitHub.
+- **Review is light by design.** Claude reads the worker's report and diff stat, skims the risky parts, runs
+  `node tools/smoke.mjs` once (workers have no browser), and looks at one screenshot. Then Claude squash-merges
+  under the `2shepard2` identity, pushes `main` to both remotes, and refreshes the preview. Claude doesn't read
+  every line or rerun every test.
+- **Two workers don't edit the same file in the same wave.** Shared data formats are agreed first, as a schema
+  comment in the data file, so systems and content can be built at the same time.
+- Daniel playtests on the LAN preview. His notes go into the next wave.
+
+### Wave 1 (Nov 2-5)
+
+| Who | Task | Files |
+|---|---|---|
+| Codex | Watch shifts and the night-event interpreter (SHIFT part 2) | `src/events.js` (new), `src/family.js`, `src/main.js`, `src/ui.js` |
+| MiniMax | ~15 night events following the schema | `src/data/events.js` only |
+| Claude | Briefs, the event schema, merging, Daniel's playtest | `JAM.md`, `src/data/events.js` schema header |
+
 ## Theme: SHIFT
 
 The theme describes what you actually do to survive a Phoenix summer without power:
