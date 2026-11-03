@@ -4,6 +4,7 @@ import { makeFigure } from './figure.js';
 import { buildMap } from './map.js';
 import { buildWorld } from './build.js';
 import { Sim } from './sim.js';
+import { NightEvents } from './events.js';
 import { Member, FAMILY } from './family.js';
 import { nearbyWalkable } from './path.js';
 import { UI } from './ui.js';
@@ -472,7 +473,12 @@ function memberMenu(v, cx, cy) {
   const helpers = game.selected.filter((m) => m !== v && m.canAct());
   const items = v.ai ? [] : [{ label: `Select ${v.name}`, disabled: v.dead, fn: () => select(v, false) }];
   const boss = helpers[0];
-  if (v.ai && !v.dead && !v.collapsed) {
+  if (!v.ai) items.push({ label: 'Keep watch', hint: 'at home · costs rest · H',
+    disabled: !v.canAct() || v.watching || v.goal?.type === 'watch', fn: () => v.keepWatch() });
+  if (v.flags.wandered) for (const h of helpers.filter((m) => !m.ai)) {
+    items.push({ label: `${h.name}: fetch ${v.name}`, disabled: !v.canAct(), fn: () => h.tend(v, 'fetch') });
+  }
+  if (v.ai && !v.dead && !v.collapsed && !v.flags.wandered) {
     if (!boss) items.push({ label: 'Select Marcus or Elena to tell the kids what to do.', disabled: true });
     else {
       const hear = game.inEarshot(boss, v);
@@ -565,6 +571,7 @@ addEventListener('keydown', (e) => {
     if (m) { select(m, false); game.focusOn(m); }
   }
   if (k === 'a' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); game.selected = game.family.filter((m) => !m.dead && !m.ai); }
+  if (k === 'h' && !e.repeat) for (const m of game.selected) m.keepWatch();
   if (k === 'z') for (const m of game.selected) if (m.canAct()) { m.stopTask(true); m.goal = { type: 'sleep', obj: null }; m.startTask(); }
   if (k === 'f') game.focusOn(game.selected[0]);
   if (k === 'escape') { ui.hideMenu(); for (const m of game.selected) game.opens.delete(m); }
@@ -603,6 +610,7 @@ function frame(now) {
     for (let s = 0; s < steps; s++) {
       sim.step(dtMin / steps);
       for (const m of game.family) m.update(dtMin / steps, dtReal / steps);
+      if (dtMin > 0) game.nightEvents.update();
     }
     rules();
   }
@@ -682,6 +690,8 @@ function rules() {
   const box = new THREE.Box3().setFromObject(fig.scene);
   const baseH = box.max.y - box.min.y;
   for (const def of FAMILY) game.family.push(new Member(def, fig, baseH, game));
+  game.nightEvents = new NightEvents(game);
+  game.nightEvent = (id, watched) => game.nightEvents.trigger(id, watched);
   game.selected = [game.family[0]];
   placeCamera();
   updateLight();

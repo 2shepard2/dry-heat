@@ -25,6 +25,12 @@ export class UI {
       else game.selectById(c.dataset.id, e.shiftKey);
       this.refresh();
     });
+    $('#family').addEventListener('contextmenu', (e) => {
+      const card = e.target.closest('.card');
+      if (!card) return;
+      e.preventDefault();
+      game.memberMenu(game.family.find((m) => m.id === card.dataset.id), e.clientX, e.clientY);
+    });
     document.addEventListener('pointerdown', (e) => {
       if (!e.target.closest('#menu')) this.hideMenu();
     }, true);
@@ -83,7 +89,7 @@ export class UI {
       const pr = m.progress();
       return `<div class="card ${sel ? 'sel' : ''} ${m.dead ? 'deadc' : ''}" data-id="${m.id}">
         <div class="nm">${sel ? '<span class="sel-mark">▶ </span>' : ''}<b>${m.name}</b> <span>${m.role}, ${m.age} · ${m.mass} kg</span></div>
-        <div class="st ${sk}">${st} · core ${m.bodyT.toFixed(1)}°F <span class="felt">feels ${Math.round(m.felt)}°${m.wetMin > 0 ? ' · wet' : ''}</span></div>
+        <div class="st ${sk}">${st}${m.isWatching() && st !== 'Keeping watch' ? ' · Keeping watch' : ''} · core ${m.bodyT.toFixed(1)}°F <span class="felt">feels ${Math.round(m.felt)}°${m.wetMin > 0 ? ' · wet' : ''}</span></div>
         ${bar(`Water −${m.deficit.toFixed(1)} L`, n.hydration)}${bar('Food', n.food)}${bar('Rest', n.energy)}${bar('Health', n.health)}${bar('Spirit', n.morale)}
         <div class="do">${esc(m.doing())}${pr !== null ? ` <em>${Math.round(pr * 100)}%</em>` : ''}</div>
       </div>`;

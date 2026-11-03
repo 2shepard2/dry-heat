@@ -43,6 +43,7 @@ export class Member {
     this.goal = null;
     this.task = null;
     this.asleep = false;
+    this.watching = false;
     this.dead = false;
     this.flags = {};
     this.refusedAt = -1e9;
@@ -115,7 +116,26 @@ export class Member {
     this.cur = a;
   }
 
+  isWatching() {
+    const map = this.game.map;
+    return this.watching && !this.ai && this.canAct() && !this.asleep && !this.task && !this.goal
+      && !this.path.length && map.houseOf(...this.cell()) === map.lots.indexOf(map.home);
+  }
+
+  keepWatch() {
+    if (this.ai || !this.canAct() || this.watching || this.goal?.type === 'watch') return false;
+    const map = this.game.map, home = map.lots.indexOf(map.home), cells = [];
+    for (let y = 0; y < map.H; y++) for (let x = 0; x < map.W; x++) {
+      if (map.walkable(x, y) && map.isIndoor(x, y) && map.houseOf(x, y) === home) cells.push([x, y]);
+    }
+    return this.approach(cells, { type: 'watch' }, 'home to keep watch');
+  }
+
   stopTask(quiet = false) {
+    if (this.watching) {
+      this.watching = false;
+      this.game.log(`${this.name} ends the watch.`);
+    }
     if (this.asleep) this.wake(quiet);
     if (this.task?.type === 'drag' && this.task.victim) this.task.victim.draggedBy = null;
     this.task = null;
@@ -151,6 +171,11 @@ export class Member {
   order(type, from) {
     const g = this.game;
     if (!this.canAct()) return;
+    if (type === 'watch') { this.keepWatch(); return; }
+    if (this.flags.wandered) {
+      g.log(`A parent needs to come and fetch ${this.name}.`, 'warn');
+      return;
+    }
     if (type === 'stay' && this.child && this.needs.morale < 30) {
       g.log(`Theo: "No! Don't leave me!" He grabs ${from.name}'s shirt and won't let go.`, 'warn');
       this.mode = { type: 'follow', who: from.id };
@@ -175,6 +200,7 @@ export class Member {
     if (this.thinkT > 0) return;
     this.thinkT = 0.5;
     const g = this.game, sim = g.sim, map = g.map;
+    if (this.flags.wandered) return; // Wait in the yard until a parent fetches him.
     const busy = this.task && this.task.type !== 'assist';
     if (busy || this.goal) return;
     const atHome = map.houseOf(...this.cell()) === map.lots.indexOf(map.home);
@@ -243,6 +269,11 @@ export class Member {
     const g = this.goal;
     this.goal = null;
     if (!g || !this.canAct()) return;
+    if (g.type === 'watch') {
+      this.watching = true;
+      this.game.log(`${this.name} keeps watch at home.`);
+      return;
+    }
     const o = g.obj;
     if (o) this.faceTo(o.x + o.w / 2, o.y + o.h / 2);
     if (g.victim) this.faceTo(g.victim.pos.x, g.victim.pos.z);
@@ -300,6 +331,7 @@ export class Member {
   }
 
   lieDown(bed) {
+    if (this.watching) { this.watching = false; this.game.log(`${this.name} ends the watch.`); }
     this.asleep = true;
     this.restAt = this.pos.clone();
     this.bed = bed || null;
@@ -315,6 +347,7 @@ export class Member {
     this.bed = null;
     this.standUp();
     if (!quiet) this.game.log(`${this.name} is awake.`);
+    this.game.nightEvents?.flush();
   }
 
   collapse() {
@@ -486,6 +519,14 @@ export class Member {
         g.log(`${this.name} soaks a towel and a shirt in the tub (${l.toFixed(0)} L). It helps.`);
         break;
       }
+      case 'fetch': {
+        const v = t.victim;
+        if (this.ai || !v?.canAct() || !g.near(this, v)) break;
+        v.flags.wandered = false;
+        v.order('follow', this);
+        g.log(`${this.name} finds ${v.name} in the yard and brings him along.`);
+        break;
+      }
       case 'douse': g.douse(this, t.victim); break;
       case 'fillCont': g.fillContainers(this); break;
     }
@@ -531,7 +572,7 @@ export class Member {
         n.morale += near * 0.8 * h; // everyone in one room, breathing
       }
       n.energy += 13 * q * h;
-    } else if (!this.collapsed) n.energy -= 3.2 * act * h;
+    } else if (!this.collapsed) n.energy -= (this.isWatching() ? 4.4 : 3.2 * act) * h;
 
     let dHealth = 0;
     if (pct > 5) dHealth -= (pct - 5) * 12;
@@ -616,6 +657,7 @@ export class Member {
     if (this.needs.energy < 20) return ['Exhausted', 'warn'];
     if (this.child && this.needs.morale < 25) return ['Crying', 'warn'];
     if (this.needs.health < 50) return ['Unwell', 'warn'];
+    if (this.isWatching()) return ['Keeping watch', 'ok'];
     return ['OK', 'ok'];
   }
 
@@ -624,19 +666,22 @@ export class Member {
     if (this.dead) return '';
     if (this.draggedBy) return `Being dragged by ${this.draggedBy.name}`;
     if (this.collapsed) return 'Unconscious';
+    if (this.isWatching()) return 'Keeping watch';
+    if (this.flags.wandered) return 'In the back yard: needs fetching';
     if (t) {
       const o = t.obj ? t.obj.name.toLowerCase() : '';
       return {
         search: `Searching the ${o}`, open: `Opening the ${o}`, drinkTap: 'Drinking from the tap',
         drinkTub: 'Drinking from the tub', fillCont: 'Filling containers', fillTub: 'Filling the tub',
         soak: 'Soaking a towel', douse: `Pouring water over ${t.victim?.name}`, drag: `Dragging ${t.victim?.name}`,
+        fetch: `Fetching ${t.victim?.name}`,
         sleep: t.obj ? 'Sleeping' : 'Sleeping on the floor',
         assist: `Helping ${t.lead?.name}`, waitHelp: `Waiting for help to lift ${t.victim?.name}`,
         job: t.waiting ? `${t.job?.label}: waiting for ${t.missing?.map((m) => m.name).join(', ') || 'everyone'}` : t.job?.label,
       }[t.type] || '';
     }
     if (this.ai && this.mode?.type === 'follow') return `Following ${this.game.family.find((m) => m.id === this.mode.who)?.name}`;
-    if (this.path.length) return this.goal?.type === 'job' && this.goal.job.walkLabel || 'Walking';
+    if (this.path.length) return this.goal?.type === 'watch' ? 'Going home to keep watch' : this.goal?.type === 'job' && this.goal.job.walkLabel || 'Walking';
     if (this.ai && this.mode?.type === 'stay') return 'Staying put';
     if (this.wetMin > 0) return 'Wet towel on';
     return '';
