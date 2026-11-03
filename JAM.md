@@ -50,24 +50,33 @@ Jam page: https://itch.io/jam/game-off-2026
 
 | Who | Task | Files |
 |---|---|---|
-| Codex | Watch shifts and the night-event interpreter (SHIFT part 2) | `src/events.js` (new), `src/family.js`, `src/main.js`, `src/ui.js` |
+| Codex | Watch shifts and the night-event interpreter  | `src/events.js` (new), `src/family.js`, `src/main.js`, `src/ui.js` |
 | MiniMax | ~15 night events following the schema | `src/data/events.js` only |
 | Claude | Briefs, the event schema, merging, Daniel's playtest | `JAM.md`, `src/data/events.js` schema header |
 
-## Theme: SHIFT
+## Theme: SHIFT, as shifting priorities (Daniel, 2026-11-02)
 
-The theme describes what you actually do to survive a Phoenix summer without power:
+**Rule: never say it.** The game, its writing and the itch page never use the word "shift" or wink at the theme.
+Players find it themselves. The jam credit line is the only mention.
 
-1. **Shift the day.** Daytime kills, so the family has to flip to nights: sleep through the afternoon,
-   then search, haul and fetch water after dark. That is the core loop, not decoration.
-2. **Shifts.** Someone has to stay awake while the others sleep. Parents trade watch shifts, and sleep
-   becomes a resource you spend.
-3. **Shift in the family.** Over the days, Jess goes from a kid you give orders to someone you can lean on
-   and control directly. The story's arc happens in the controls.
+The theme is **what matters changes**. On Thursday it's the job, money, the declined card, who picks Theo up,
+and the closed bedroom door. By day 4 it's liters, shade, a seven-year-old's breathing, and whether Marcus and
+Elena can work as a team. We show the change through what the game asks of you, never through narration:
+
+- **The objective list changes without comment.** Prologue objectives are ordinary life: finish the report,
+  pick up Theo, buy groceries. After the outage the same panel says fill the tub, keep everyone alive. Late in
+  the game it's down to one line.
+- **Items change value.** Cash, car keys, a work laptop and the phone matter on Thursday and are dead weight by
+  day 5. Bleach, a tarp and a can opener are junk in the garage on Thursday and precious by day 5.
+- **The marriage changes.** What they argued about stops mattering. What they do instead (share the worst
+  watch, give up water) is the story (docs/STORY.md section 3).
+- **The routine changes.** Living by night and watch rotations stay as mechanics, because they're how you
+  survive here. We just don't label them as the theme.
+- **Jess.** She goes from a kid you give orders to someone you can lean on, and later control directly.
 
 ## Jam scope (rough)
 
-- Week 1 (Nov 2-8): day/night shift loop, watch shifts, water trips out at night.
+- Week 1 (Nov 2-8): night living, watch rotation, light and usable items, water trips out at night.
 - Week 2 (Nov 9-15): base building (shade, swamp cooler, water storage), more of the street.
 - Week 3 (Nov 16-22): real characters and art pass, **audio** (heat drone, cicadas, night sounds),
   and Jess's arc.

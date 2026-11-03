@@ -116,7 +116,7 @@ The final state is judged on four axes: who is alive, who is well (water, medica
 
 **Recommendation for the jam: build A as the baseline, B as the optional second, and fold D in as a variation of both.** Reasons:
 - A needs only a trigger and a text builder. It is the cheapest path to a real ending and it honours Daniel's "I'm not sure what the end would be": the answer is that it is not an escape, only an interval.
-- It fits SHIFT. The family has shifted to nights, and when the grid returns they've changed.
+- It fits the theme quietly: when the lights come back, what the family cares about is not what it was on Thursday.
 - B adds a short interactive sequence and a new map region, which is two to three days of Codex time. Take it only if week 3 goes well.
 - C needs a whole other map and travel loop. Cut it for the jam; mention Flagstaff in dialogue as the road not taken.
 

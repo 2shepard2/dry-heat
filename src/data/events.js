@@ -1,6 +1,6 @@
 // Dry Heat night events. Plain data, no imports. Content: MiniMax. Interpreter: src/events.js (Codex).
 //
-// SHIFT, part 2 (JAM.md): someone has to stay awake. Between 10 PM and 5 AM the game rolls for an event
+// Someone has to stay awake (JAM.md, theme section). Between 10 PM and 5 AM the game rolls for an event
 // roughly every 90 game minutes. If a parent is on watch (awake, not working a task), the `watched` branch
 // runs; otherwise `unwatched` runs. Unwatched is always worse. Nothing supernatural, nothing gamey:
 // heat, thirst, a scared kid, a desperate neighbour, animals, the house itself.
