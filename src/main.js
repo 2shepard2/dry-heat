@@ -276,26 +276,111 @@ const game = {
     const beds = map.objects.filter((o) => o.kind === 'bed' && o.home && !taken.has(o));
     return beds.sort((a, b) => Math.hypot(a.x - m.pos.x, a.y - m.pos.z) - Math.hypot(b.x - m.pos.x, b.y - m.pos.z))[0];
   },
+  // A job is a list of steps; the lead walks to each step's cells, waits for the whole crew, works `dur` minutes.
   startJob(lead, job) {
-    const [ax, ay] = job.anchor;
-    if (!lead.moveTo(ax, ay, { type: 'job', job })) { game.log(`${lead.name} can't get there.`, 'warn'); return; }
+    job.i = 0;
+    if (!game.jobStep(lead, job)) return;
     for (const m of job.crew) if (m !== lead) m.order('help', lead);
-    game.log(`${lead.name}: "Everybody, come help me with the mattresses."`);
+    if (job.say) game.log(`${lead.name}: "${job.say}"`);
   },
-  moveMattresses() {
-    game.mattressesMoved = true;
-    const spots = [[31, 12], [32, 12], [31, 13], [32, 13]];
-    const mat = new THREE.MeshLambertMaterial({ color: 0x8a96a3 });
-    for (const [x, y] of spots) {
+  jobStep(lead, job) {
+    const s = job.steps[job.i];
+    job.label = s.label; job.dur = s.dur; job.walkLabel = s.walkLabel;
+    if (!lead.approach(s.cells(), { type: 'job', job }, s.what || 'there')) { game.dropCarry(); return false; }
+    return true;
+  },
+  jobDone(lead, job) {
+    job.steps[job.i].done(lead);
+    job.i++;
+    if (job.i < job.steps.length) game.jobStep(lead, job);
+    else job.finish?.(lead);
+  },
+
+  // ---- the mattress haul: bedroom by bedroom, everyone lifting, into the living room
+  mattressJob(lead, crew) {
+    const beds = map.objects.filter((o) => o.kind === 'bed' && o.home && !o.together).sort((a, b) => a.y - b.y || a.x - b.x);
+    if (!beds.length) { game.mattressesMoved = true; return; }
+    // floor spots in the middle of the living room, away from the west wall; whoever stands on them is moved off
+    const spots = [[31, 12], [32, 12], [31, 13], [32, 13]].filter(([x, y]) => map.walkable(x, y));
+    const share = beds.map((_, k) => (beds.length < spots.length && k === 0 ? 2 : 1)); // the big bed takes two spots
+    let n = 0;
+    const plan = beds.map((b, k) => { const s = spots.slice(n, n + share[k]); n += share[k]; return s; }).filter((s) => s.length);
+    const steps = [];
+    plan.forEach((cells, k) => {
+      const b = beds[k];
+      const big = cells.length > 1;
+      const what = big ? 'the big mattress' : 'a mattress';
+      steps.push({ label: `Lifting ${what}`, walkLabel: `Going for ${what}`, dur: 2, what: `the ${b.name.toLowerCase()}`, cells: () => game.standCells(b),
+        done: (l) => game.liftMattress(l, b, big) });
+      steps.push({ label: `Setting down ${what}`, walkLabel: `Carrying ${what}`, dur: 1, what: 'the living room', cells: () => game.dropStand(cells),
+        done: () => game.placeMattress(cells) });
+    });
+    game.startJob(lead, { crew, steps, say: 'Everybody, come help me with the mattresses.', finish: () => {
+      game.mattressesMoved = true;
+      for (const o of map.objects) if (o.kind === 'bed' && o.home && !o.together) { if (o.mesh) o.mesh.scale.y = 0.35; o.name = 'Bare bed frame'; o.kind = 'frame'; }
+      game.log('The mattresses are on the living room floor, away from the west wall. Everyone sleeps in one room now.', 'good');
+    } });
+  },
+  // where to stand to get at a bed (a bed boxed in by furniture is reached from next to it)
+  standCells(o) {
+    const c = map.useCells(o);
+    if (c.length) return c;
+    const out = [];
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+      const x = o.x + dx, y = o.y + dy;
+      if (map.walkable(x, y) && map.houseOf(x, y) === map.houseOf(o.x, o.y)) out.push([x, y]);
+    }
+    return out;
+  },
+  dropStand(cells) {
+    const out = [];
+    for (const [x, y] of cells) for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
+      const nx = x + dx, ny = y + dy;
+      if (map.walkable(nx, ny) && !cells.some(([a, b]) => a === nx && b === ny)) out.push([nx, ny]);
+    }
+    return out;
+  },
+  carry: null,
+  liftMattress(lead, bed, big) {
+    const geo = new THREE.BoxGeometry(big ? 1.5 : 0.95, 0.2, 1.9);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0xc9c1ad }));
+    mesh.castShadow = true;
+    scene.add(mesh);
+    game.carry = { lead, mesh, bed };
+    if (bed.mesh) bed.mesh.scale.y = 0.35;
+    bed.name = 'Bare bed frame'; bed.kind = 'frame';
+    const n = game.family.filter((m) => !m.dead).length;
+    game.log(big ? `It takes all ${n} of them to get the big mattress off the frame and through the door.` : `They tip the mattress up off the frame and walk it out.`);
+  },
+  // the carry is abandoned (lead sent elsewhere, collapsed): the mattress goes back on its frame
+  dropCarry() {
+    const c = game.carry;
+    if (!c) return;
+    scene.remove(c.mesh); c.mesh.geometry.dispose();
+    game.carry = null;
+    if (c.bed) { if (c.bed.mesh) c.bed.mesh.scale.y = 1; c.bed.name = 'Bed'; c.bed.kind = 'bed'; }
+    game.log(`${c.lead.name} lets go of the mattress. They shove it back onto the frame for now.`, 'warn');
+  },
+  placeMattress(cells) {
+    const c = game.carry;
+    if (c) { scene.remove(c.mesh); c.mesh.geometry.dispose(); game.carry = null; }
+    const mat = new THREE.MeshLambertMaterial({ color: 0xc9c1ad });
+    for (const [x, y] of cells) {
       const i = map.idx(x, y);
       const o = { id: map.objects.length, kind: 'bed', name: 'Mattress on the floor', x, y, w: 1, h: 1, lot: map.lots.indexOf(map.home), home: true, floor: map.type[i], together: true, items: [] };
       map.type[i] = 13; map.objAt[i] = o.id; map.objects.push(o);
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.22, 0.96).translate(x + 0.5, 0.11, y + 0.5), mat);
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.22, 0.98).translate(x + 0.5, 0.11, y + 0.5), mat);
       mesh.castShadow = true; mesh.receiveShadow = true; mesh.userData.obj = o; o.mesh = mesh;
       scene.add(mesh); world.pickables.push(mesh);
+      // nobody ends up standing inside it
+      for (const m of game.family) {
+        const [mx, my] = m.cell();
+        if (mx !== x || my !== y) continue;
+        const spot = nearbyWalkable(map, x, y, 1)[0];
+        if (spot) m.pos.set(spot[0] + 0.5, m.pos.y, spot[1] + 0.5);
+      }
     }
-    for (const o of map.objects) if (o.kind === 'bed' && o.home && !o.together && o.mesh) { o.mesh.scale.y = 0.35; o.name = 'Bare bed frame'; o.kind = 'frame'; }
-    game.log('The mattresses are on the living room floor, away from the west wall. Everyone sleeps in one room now.', 'good');
+    game.log('They drop it on the living room floor with a thump.');
   },
   alarmT: 0,
   alarm() { game.alarmT = 3; },
@@ -376,10 +461,7 @@ function objectMenu(o, cx, cy) {
       const crew = game.family.filter((m) => !m.dead);
       const able = crew.every((m) => m.canAct());
       items.push({ label: `Everyone: drag the mattresses into the living room`, hint: able ? 'needs all of you · cooler, and together' : 'not while someone is down',
-        disabled: !able, fn: () => game.startJob(lead, {
-          label: 'Moving mattresses', dur: 15, crew, anchor: [31, 11],
-          done: () => game.moveMattresses(),
-        }) });
+        disabled: !able, fn: () => game.mattressJob(lead, crew) });
     }
   }
   for (const it of items) { const f = it.fn; if (f) it.fn = () => { const who = game.selected.find((m) => m.canAct()); if (!who || who.willObey()) f(); }; }
@@ -558,6 +640,11 @@ function frame(now) {
     game.alarmT = Math.max(0, game.alarmT - dtReal);
     const pulse = 0.55 + 0.45 * Math.sin(now / (worst >= 1 ? 220 : 500));
     $('#danger').style.opacity = started ? String(Math.min(1, worst * pulse + game.alarmT * 0.3)) : '0';
+  }
+  if (game.carry) {
+    const c = game.carry, l = c.lead;
+    if (!(l.task?.job || l.goal?.job) || !l.canAct()) game.dropCarry();
+    else { c.mesh.position.set(l.pos.x, l.def.h * 0.72, l.pos.z); c.mesh.rotation.y = l.obj.rotation.y; }
   }
   for (const [m, o] of game.opens) {
     const d = Math.min(...map.objCells(o).map(([x, y]) => Math.hypot(x + 0.5 - m.pos.x, y + 0.5 - m.pos.z)));

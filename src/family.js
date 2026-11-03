@@ -358,7 +358,8 @@ export class Member {
     } else if (this.path.length && sim.speed > 0 && this.canAct()) {
       const sick = this.bodyT >= EXHAUSTION_F ? 0.7 : 1;
       const dragging = this.task?.type === 'drag' ? (this.helpers(2.6).length ? 0.85 : 0.45) : 1;
-      let dist = this.walk * sick * dragging * dtReal * sim.speed;
+      const hauling = this.game.carry?.lead === this ? 0.7 : 1;
+      let dist = this.walk * sick * dragging * hauling * dtReal * sim.speed;
       while (dist > 0 && this.path.length) {
         const [nx, ny] = this.path[0];
         const tx = nx + 0.5, tz = ny + 0.5;
@@ -424,11 +425,21 @@ export class Member {
       return;
     }
     if (t.type === 'job') {
-      const crew = t.job.crew.filter((m) => !m.dead);
-      const ready = crew.every((m) => m === this || (m.canAct() && m.task?.type === 'assist' && m.task.lead === this && m.pos.distanceTo(this.pos) < 4.5));
-      t.waiting = !ready;
-      if (ready) t.t += dtMin;
-      if (t.t >= t.dur) { this.task = null; t.job.done(); }
+      const crew = t.job.crew.filter((m) => !m.dead && m !== this);
+      const onIt = (m) => m.canAct() && m.task?.type === 'assist' && m.task.lead === this;
+      t.missing = crew.filter((m) => !onIt(m) || m.pos.distanceTo(this.pos) >= 4.5);
+      t.waiting = t.missing.length > 0;
+      // someone walked off, refused, or was sent elsewhere: say so once instead of standing there silently
+      const gone = crew.filter((m) => !onIt(m));
+      if (gone.length) {
+        t.goneT = (t.goneT || 0) + dtMin;
+        if (t.goneT >= 1 && !t.warned) {
+          t.warned = true;
+          g.log(`${this.name} can't do this short-handed and waits for ${gone.map((m) => m.name).join(' and ')}. Click ${gone.length > 1 ? 'them' : gone[0].him} and ask for help.`, 'warn');
+        }
+      } else { t.goneT = 0; t.warned = false; }
+      if (!t.waiting) t.t += dtMin;
+      if (t.t >= t.dur) { this.task = null; g.jobDone(this, t.job); }
       return;
     }
     t.t += dtMin * (['search', 'fillCont'].includes(t.type) ? this.helpRate() : 1);
@@ -620,11 +631,11 @@ export class Member {
         soak: 'Soaking a towel', douse: `Pouring water over ${t.victim?.name}`, drag: `Dragging ${t.victim?.name}`,
         sleep: t.obj ? 'Sleeping' : 'Sleeping on the floor',
         assist: `Helping ${t.lead?.name}`, waitHelp: `Waiting for help to lift ${t.victim?.name}`,
-        job: t.waiting ? `${t.job?.label}: waiting for everyone` : t.job?.label,
+        job: t.waiting ? `${t.job?.label}: waiting for ${t.missing?.map((m) => m.name).join(', ') || 'everyone'}` : t.job?.label,
       }[t.type] || '';
     }
     if (this.ai && this.mode?.type === 'follow') return `Following ${this.game.family.find((m) => m.id === this.mode.who)?.name}`;
-    if (this.path.length) return 'Walking';
+    if (this.path.length) return this.goal?.type === 'job' && this.goal.job.walkLabel || 'Walking';
     if (this.ai && this.mode?.type === 'stay') return 'Staying put';
     if (this.wetMin > 0) return 'Wet towel on';
     return '';

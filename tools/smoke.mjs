@@ -113,7 +113,7 @@ const scen = await page.evaluate(() => {
   res.bothOpen = g.opens.size;
   // 2. whole-family mattress job
   const crew = g.family.filter((m) => !m.dead);
-  g.startJob(marcus, { label: 'Moving mattresses', dur: 15, crew, anchor: [31, 11], done: () => g.moveMattresses() });
+  g.mattressJob(marcus, crew);
   run(600, () => g.mattressesMoved);
   res.mattresses = !!g.mattressesMoved;
   res.jobKids = [jess.doing(), theo.doing()];
