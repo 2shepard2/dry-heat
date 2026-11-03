@@ -21,10 +21,12 @@ Jam page: https://itch.io/jam/game-off-2026
 
 ## Before the repo goes public
 
-- [ ] Replace `assets/models/Xbot.glb`. It is Mixamo-derived and must not be redistributed. Use CC0 rigged
-      low-poly characters, or our own.
-- [ ] Rewrite commit authors to a public identity. Current commits carry `@hester.local` addresses.
-- [ ] Add a LICENSE and an itch-ready README, and scrub LAN addresses from docs.
+- [x] Placeholder Mixamo model replaced by our own figures (`src/figure.js`) and purged from history (2026-11-02).
+- [x] Commit authors rewritten to `2shepard2` (GitHub noreply); repo-local git identity set to match.
+- [x] Public at https://github.com/2shepard2/dry-heat via Gitea push mirror (hester-lab/dry-heat, sync on commit).
+      Anything pushed to Gitea goes public within seconds; never push internal branches there.
+- [x] Daniel joined the jam on itch.io (2026-11-02).
+- [ ] LICENSE (Daniel's call). Until then the code is all rights reserved by default.
 
 ## Theme: SHIFT
 
