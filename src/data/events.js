@@ -60,9 +60,9 @@ export const NIGHT_EVENTS = [
   },
   {
     id: 'jess-slips-out', weight: 0.8, minDay: 3, once: true,
-    text: 'Jess\'s sandals are gone from the step and the screen door by the laundry room is standing open. She mentioned a friend with a car.',
-    watched: { text: 'The watcher finds her halfway down the block and walks her home. They argue about it in low voices for an hour.', effects: { energy: { watcher: -7 }, morale: { jess: -6, parents: -2 } } },
-    unwatched: { text: 'She is out past three and comes back sunburned and quiet. The screen door was propped open behind her all night.', effects: { energy: { jess: -12 }, morale: { jess: -10, all: -5 }, log: 'bad' } },
+    text: 'Jess\'s sandals are gone from the step and the screen door by the laundry room is standing open. The kids from the street meet at the canal after dark now.',
+    watched: { text: 'The watcher finds her on the canal bank with three other kids and walks her home. They argue about it in low voices for an hour.', effects: { energy: { watcher: -7 }, morale: { jess: -6, parents: -2 } } },
+    unwatched: { text: 'She comes back past three, muddy to the knees and quiet. The screen door was propped open behind her all night.', effects: { energy: { jess: -12 }, morale: { jess: -10, all: -5 }, log: 'bad' } },
   },
   {
     id: 'neighbor-at-door', weight: 1, minDay: 2,
