@@ -58,7 +58,7 @@ const CHAR_T = {
 };
 
 export const LOTS = [
-  { id: 'nw', name: 'the Delgado house', gx: 0, north: true, mirror: true, pool: true },
+  { id: 'nw', name: "Walt's house", gx: 0, north: true, mirror: true, pool: true },
   { id: 'home', name: 'home', gx: 1, north: true, mirror: false, pool: false, home: true },
   { id: 'ne', name: 'the Pruitt house', gx: 2, north: true, mirror: false, pool: false },
   { id: 'sw', name: 'the Nguyen house', gx: 0, north: false, mirror: false, pool: false },
@@ -67,7 +67,7 @@ export const LOTS = [
 ];
 
 const CARS = [
-  { name: 'Your SUV', lot: 'home', x: 35, y: 16, w: 4, h: 2, color: 0x4a5560 },
+  { name: 'Family car', lot: 'home', x: 35, y: 16, w: 4, h: 2, color: 0x4a5560 },
   { name: 'Dusty pickup', lot: null, x: 6, y: 19, w: 4, h: 2, color: 0x7a3a2a },
   { name: 'Silver sedan', lot: null, x: 46, y: 23, w: 4, h: 2, color: 0x9a9da0 },
   { name: 'Minivan', lot: 'sw', x: 15, y: H - 18, w: 4, h: 2, color: 0x2f3d55 },
@@ -175,5 +175,18 @@ export function buildMap() {
   };
   map.home = lots.find((l) => l.home);
   map.tub = objects.find((o) => o.kind === 'tub' && o.home);
+  // Interaction sites use existing walkable neighbours without changing collision cells.
+  // West / south windows remain walls; main adds low, clickable panes and finished panels.
+  map.sites = [
+    { key: 'west-bedroom', kind: 'window', name: 'West bedroom window', x: 22, y: 7, axis: 'west' },
+    { key: 'west-front-bedroom', kind: 'window', name: 'West front bedroom window', x: 22, y: 14, axis: 'west' },
+    { key: 'south-bedroom', kind: 'window', name: 'South bedroom window', x: 24, y: 15, axis: 'south' },
+    { key: 'south-living', kind: 'window', name: 'South living window', x: 30, y: 15, axis: 'south' },
+    { key: 'tarp', kind: 'tarp', name: 'Yard shade posts', x: 28, y: 3 },
+    { key: 'grill', kind: 'grill', name: 'Yard grill', x: 33, y: 3 },
+    { key: 'panel', kind: 'panel', name: 'Electrical panel — small solar circuit', x: 38, y: 13 },
+    { key: 'fan', kind: 'fan', name: 'Living room fan spot', x: 31, y: 12 },
+    { key: 'walt', kind: 'walt', name: "Walt's front door", x: 12, y: 15 },
+  ].map((s) => ({ ...s, w: 1, h: 1, home: s.kind !== 'walt', site: true }));
   return map;
 }

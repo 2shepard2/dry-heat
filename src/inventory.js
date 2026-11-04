@@ -29,8 +29,8 @@ export const entryKg = (e) => (isLiquid(e) ? EMPTY_KG[e.id] + e.left : ITEMS[e.i
 export const invKg = (inv) => inv.reduce((s, e) => s + entryKg(e), 0);
 
 export function addEntry(inv, e) {
-  if (!isLiquid(e) && e.chargeMin === undefined) {
-    const same = inv.find((x) => x.id === e.id && !isLiquid(x) && x.chargeMin === undefined);
+  if (!isLiquid(e) && e.chargeMin === undefined && e.cookedAt === undefined) {
+    const same = inv.find((x) => x.id === e.id && !isLiquid(x) && x.chargeMin === undefined && x.cookedAt === undefined);
     if (same) { same.n += e.n; return; }
   }
   inv.push(e);
@@ -40,7 +40,7 @@ export function addEntry(inv, e) {
 export function isSpoiled(e, sim) {
   if (e.id === 'ice_bag') return false; // melted ice is still water
   const s = ITEMS[e.id].spoilsH;
-  return !!s && (sim.min - POWER_OUT_MIN) / 60 > s;
+  return !!s && (sim.min - (e.cookedAt ?? POWER_OUT_MIN)) / 60 > s;
 }
 
 export function label(e, sim) {
@@ -93,6 +93,12 @@ export function itemHint(id) {
   if (['pocket_knife', 'kitchen_knife'].includes(id)) return 'Opens sealed cans slowly (5 minutes)';
   if (['lighter', 'matches'].includes(id)) return 'Light a candle from its menu';
   if (id === 'aa_batteries') return 'Load a flashlight, headlamp or lantern from its menu';
+  if (['aluminum_foil', 'windshield_shade'].includes(id)) return 'Shade a west or south window from its menu';
+  if (id === 'tarp') return 'Rig yard shade with two people at the shade posts';
+  if (['propane_tank', 'charcoal_bag'].includes(id)) return 'Fuel the outdoor grill from its menu';
+  if (['deep_cycle_battery', 'charge_controller'].includes(id)) return 'Build at the garage electrical panel after visiting Walt';
+  if (id === 'box_fan') return 'Place at the living room fan spot once the circuit is built';
+  if (id === 'nebulizer') return 'Treat Theo near the living room circuit in daylight';
   if (it.cat === 'material') return 'Building material: later';
   if (it.cat === 'fuel' || it.tags?.includes('fuel')) return 'Fuel: later';
   if (it.cat === 'tool') return 'Tool: later';

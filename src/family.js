@@ -286,7 +286,7 @@ export class Member {
     const dur = {
       search: (o?.home ? 4 : o?.car ? 6 : 8) * slow,
       open: 0.3, drinkTap: 3, drinkTub: 2, fillCont: 4, soak: 5, douse: 3, fillTub: Infinity, sleep: Infinity, drag: Infinity,
-      job: g.job?.dur ?? 15,
+      job: g.job?.dur ?? 15, system: g.duration ?? 3,
     }[g.type] ?? 1;
     if (g.type === 'fillTub') {
       const other = this.game.family.find((m) => m !== this && m.task?.type === 'fillTub');
@@ -453,9 +453,11 @@ export class Member {
 
   updateTask(dtMin) {
     const t = this.task;
-    if (!t || t.type === 'drag') return;
+    if (!t || t.type === 'drag' || t.type === 'carAC') return;
     const g = this.game, sim = g.sim;
     if (t.type === 'assist') return;
+    if (t.type === 'system' && !g.systems.poweredTask(this, t.action)) { t.waitingPower = true; return; }
+    t.waitingPower = false;
     if (t.type === 'waitHelp') {
       const v = t.victim;
       const crew = this.mass + this.helpers(2.6).reduce((s, m) => s + m.mass, 0);
@@ -500,6 +502,7 @@ export class Member {
     this.task = null;
     const o = t.obj;
     switch (t.type) {
+      case 'system': g.systems.complete(t.action, this, t.data); break;
       case 'openCan': {
         const i = this.inv.indexOf(t.entry);
         if (i >= 0) g.useItem(this, i, t.target, true);
@@ -550,8 +553,11 @@ export class Member {
     const indoor = map.isIndoor(cx, cy);
     this.indoor = indoor;
     const sunReduction = ITEMS[this.worn?.id]?.wear?.sunReduction || 0;
-    this.felt = indoor ? sim.indoor + g.candleHeat(this) + (map.isGarage(cx, cy) ? 5 : 0) - (this.bed?.together ? 2 : 0) : sim.outdoor() + 14 * sim.sun() * (1 - sunReduction);
-    const working = this.task && !this.asleep;
+    const tarpReduction = g.systems?.yardShade(cx, cy) ? 0.75 : 0;
+    this.felt = indoor ? sim.indoor + g.candleHeat(this) + (map.isGarage(cx, cy) ? 5 : 0) - (this.bed?.together ? 2 : 0) : sim.outdoor() + 14 * sim.sun() * (1 - Math.max(sunReduction, tarpReduction));
+    if (indoor) this.felt -= g.systems?.fanCooling(this) || 0;
+    if (g.systems?.carCooling(this)) this.felt = 78;
+    const working = this.task && !this.asleep && this.task.type !== 'carAC';
     const act = this.collapsed || this.draggedBy ? 0.8 : this.asleep ? 0.6
       : this.path.length ? (this.task?.type === 'drag' ? 2.2 : 1.4) : working ? 1.2 : 1;
 
@@ -683,6 +689,8 @@ export class Member {
     if (t) {
       const o = t.obj ? t.obj.name.toLowerCase() : '';
       return {
+        carAC: 'Cooling in the car (burning fuel)',
+        system: t.waitingPower ? 'Waiting for daylight power' : { visitWalt: 'Visiting Walt', waterWalt: 'Bringing Walt water', cook: 'Cooking on the yard grill', enterCar: 'Getting into the car', placeFan: 'Setting up the fan', nebulizer: 'Nebulizer treatment', recharge: 'Charging from daylight', radio: 'Cranking the radio' }[t.action] || 'Working',
         openCan: 'Opening a can with a knife',
         search: `Searching the ${o}`, open: `Opening the ${o}`, drinkTap: 'Drinking from the tap',
         drinkTub: 'Drinking from the tub', fillCont: 'Filling containers', fillTub: 'Filling the tub',

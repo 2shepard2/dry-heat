@@ -5,6 +5,7 @@ export class Sim {
   constructor() {
     this.min = 6 * 60;      // start 6:00 AM
     this.speed = 1;          // game minutes per real second
+    this.shadedWindows = 0;
     this.indoor = 79;        // the AC was running until 5:40
     this.tubL = 0;
     this.TUB_MAX = 160;
@@ -44,7 +45,7 @@ export class Sim {
   step(dtMin) {
     this.min += dtMin;
     // An unpowered stucco house drifts toward outdoor-4°F with a ~10 hour lag: it gets worse every day.
-    const target = this.outdoor() - 4;
+    const target = this.outdoor() - 4 - Math.min(3, this.shadedWindows) * 4 * this.sun();
     this.indoor += (target - this.indoor) * Math.min(1, dtMin / 600);
   }
 }

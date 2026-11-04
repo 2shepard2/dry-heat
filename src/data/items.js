@@ -5,6 +5,13 @@
 // spoilsH = hours until spoiled at ~100F without refrigeration. Omit = shelf-stable.
 
 export const ITEMS = {
+  deep_cycle_battery: { name: 'RV deep-cycle battery', cat: 'material', kg: 22, desc: "Pruitt's spare RV battery. For a small solar circuit." },
+  charge_controller: { name: 'Solar charge controller', cat: 'material', kg: 0.8, desc: "Walt's spare controller. Needs his wiring instructions." },
+  box_fan: { name: 'Box fan', cat: 'tool', kg: 3, desc: 'Moves air in one room on the small solar circuit. 60 watts.' },
+  nebulizer: { name: "Theo's nebulizer", cat: 'medical', kg: 1.2, desc: 'Needs 80 watts from the daylight circuit. Treatment once per day.' },
+  aa_rechargeable: { name: 'Rechargeable AA pack', cat: 'light', kg: 0.1, desc: 'Use the solar charger, then load a light. Alkaline packs cannot be recharged.' },
+  frozen_meat_pack: { name: 'Deep-frozen family meal', cat: 'food', kg: 1.1, desc: 'A solid frozen package from the closed freezer. Cook tonight before it warms through.', use: { food: 24, health: -8 }, spoilsH: 18, tags: ['needsCooking'] },
+  cooked_meal: { name: 'Grilled meal', cat: 'food', kg: 0.45, desc: 'Eat soon: cooked food still spoils in this heat.', use: { food: 24, morale: 5 }, spoilsH: 4 },
   // ---- water and drinks ----
   water_case: { name: 'Case of bottled water', cat: 'water', kg: 9.5, liters: 12, desc: 'Twenty-four half-liter bottles, shrink-wrapped. Warm now.', use: { hydration: 17 }, tags: ['container'] },
   water_bottle: { name: 'Bottle of water', cat: 'water', kg: 0.55, liters: 0.5, desc: 'Sealed half-liter. Warm as bathwater.', use: { hydration: 17 }, tags: ['container'] },

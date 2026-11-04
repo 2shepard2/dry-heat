@@ -1,6 +1,7 @@
 // Night-event data stays separate so content can grow without changing the interpreter.
 import { NIGHT_EVENTS } from './data/events.js';
 import { T } from './map.js';
+import { needsMatch } from './conditions.js';
 
 const record = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const clamp = (v, max = 100) => Math.max(0, Math.min(max, v));
@@ -12,18 +13,22 @@ const warn = (id, message) => console.warn(`Night event ${id || '(no id)'}: ${me
 function validEvent(e) {
   if (!record(e) || typeof e.id !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(e.id)
     || !Number.isFinite(e.weight) || e.weight <= 0 || !Number.isInteger(e.minDay) || e.minDay < 1
+    || (e.maxDay !== undefined && (!Number.isInteger(e.maxDay) || e.maxDay < e.minDay))
     || (e.once !== undefined && typeof e.once !== 'boolean') || typeof e.text !== 'string') return false;
   if (e.needs !== undefined) {
     if (!record(e.needs)) return false;
     for (const [k, v] of Object.entries(e.needs)) {
-      if (k === 'tubMinL' ? !Number.isFinite(v) || v < 0
+      if (k === 'flag' ? !record(v) || Object.values(v).some((x) => !['string', 'number', 'boolean'].includes(typeof x))
+        : ['trustBelow', 'trustAbove'].includes(k) ? !Number.isFinite(v)
+        : k === 'tubMinL' ? !Number.isFinite(v) || v < 0
         : ['kidAwake', 'carryingFood'].includes(k) ? v !== true : true) return false;
     }
   }
   for (const branch of [e.watched, e.unwatched]) {
     if (!record(branch) || typeof branch.text !== 'string' || !record(branch.effects)) return false;
     for (const [k, v] of Object.entries(branch.effects)) {
-      if (['tubL', 'loseFood'].includes(k) && !Number.isFinite(v)) return false;
+      if (k === 'flags' && !record(v)) return false;
+      if (['tubL', 'loseFood', 'trust'].includes(k) && !Number.isFinite(v)) return false;
       if (k === 'theoWanders' && v !== true) return false;
       if (k === 'wake' && !['all', 'kids', 'parents'].includes(v)) return false;
       if (k === 'log' && !['warn', 'bad'].includes(v)) return false;
@@ -69,7 +74,8 @@ export class NightEvents {
   }
   eligible(e) {
     const g = this.game, n = e.needs || {};
-    return g.sim.day >= e.minDay && !(e.once && this.used.has(e.id))
+    return g.sim.day >= e.minDay && (e.maxDay === undefined || g.sim.day <= e.maxDay)
+      && needsMatch(g, n) && !(e.once && this.used.has(e.id))
       && (n.tubMinL === undefined || g.sim.tubL >= n.tubMinL)
       && (!n.kidAwake || this.group('kids').some((m) => !m.asleep && !m.collapsed))
       && (!n.carryingFood || g.family.some((m) => !m.dead && m.inv.some((item) => this.food(item))));
@@ -117,6 +123,8 @@ export class NightEvents {
     const g = this.game;
     for (const [key, value] of Object.entries(effects)) {
       switch (key) {
+        case 'trust': g.trust = clamp((g.trust ?? 45) + value); break;
+        case 'flags': Object.assign(g.flags, value); break;
         case 'tubL': g.sim.tubL = clamp(g.sim.tubL + value, g.sim.TUB_MAX); break;
         case 'morale':
         case 'energy':

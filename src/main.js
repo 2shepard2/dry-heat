@@ -5,6 +5,7 @@ import { buildMap, T } from './map.js';
 import { buildWorld } from './build.js';
 import { Sim } from './sim.js';
 import { NightEvents } from './events.js';
+import { SurvivalSystems } from './systems.js';
 import { Member, FAMILY } from './family.js';
 import { nearbyWalkable } from './path.js';
 import { UI } from './ui.js';
@@ -98,6 +99,8 @@ const game = {
   objectives: [
     { id: 'tub', text: 'Fill the bathtub while the taps still run' },
     { id: 'look', text: 'Search the house for supplies' },
+    { id: 'shade', text: 'Shade a west or south window (foil or windshield shade)' },
+    { id: 'solar', text: 'Visit Walt, find Pruitt’s RV battery, build a small circuit' },
     { id: 'night', text: 'Keep everyone alive until nightfall (8 PM)' },
   ],
   log: (t, k) => ui.log(t, k),
@@ -144,6 +147,7 @@ const game = {
   lightItem(m, i) {
     const e = m.inv[i], spec = ITEMS[e?.id]?.light;
     if (!spec || !m.canAct()) return false;
+    game.systems.deadSolar();
     if (game.lights.length >= 4) { game.log('Four lights are already on. Put one out first.', 'warn'); return false; }
     if (!spec.placed && game.lights.some((l) => l.owner === m)) {
       game.log(`${m.name} already has a light on. Switch it off first.`, 'warn'); return false;
@@ -158,9 +162,10 @@ const game = {
       }
       left = e.chargeMin ?? spec.minutes;
     } else if (left <= 0) {
-      const battery = m.inv.find((x) => x.id === 'aa_batteries' && x.n > 0);
+      const battery = m.inv.find((x) => (x.id === 'aa_batteries' || x.id === 'aa_rechargeable' && x.chargeMin > 0) && x.n > 0);
       if (!battery) { game.log(`${m.name} needs a pack of AA batteries.`, 'warn'); return false; }
-      takeOne(m.inv, battery);
+      if (battery.id === 'aa_rechargeable') { const pack = takeOne(m.inv, battery); pack.chargeMin = 0; addEntry(m.inv, pack); }
+      else takeOne(m.inv, battery);
       left = spec.minutes;
     }
     const entry = takeOne(m.inv, e);
@@ -260,6 +265,7 @@ const game = {
     }
     const dark = game.isDark(m), found = [], missed = [];
     for (const e of o.unseen || []) (dark && rng.chance(0.30) ? missed : found).push(e);
+    game.systems.stock(o, found);
     for (const e of found) addEntry(o.items, e);
     o.unseen = missed;
     o.searched = true;
@@ -289,6 +295,18 @@ const game = {
     if (!e) return;
     const it = ITEMS[e.id];
     const items = [];
+    const systemAction = (label, fn, hint = '') => items.push({ label, fn, hint, disabled: !m.canAct() });
+    if (e.id === 'radio_handcrank') systemAction('Crank and listen', () => game.playRadio(m), '2 min · next available broadcast');
+    if (['aluminum_foil', 'windshield_shade'].includes(e.id)) {
+      for (const site of map.sites.filter((s) => s.kind === 'window' && !game.systems.shades.has(s.key)))
+        systemAction(`Shade ${site.name.toLowerCase()}`, () => game.shadeWindow(m, site.key), 'walk there · 8 min');
+    }
+    if (e.id === 'tarp') systemAction('Rig shade at yard posts', () => game.rigTarp(m, [m, ...game.selected]), 'two people · 20 min');
+    if (['propane_tank', 'charcoal_bag'].includes(e.id)) systemAction('Cook on the yard grill', () => game.cookGrill(m, e.id === 'propane_tank' ? 'propane' : 'charcoal'), 'bring food · 20 min');
+    if (['deep_cycle_battery', 'charge_controller'].includes(e.id)) systemAction('Build at the garage panel', () => game.buildCircuit(m));
+    if (e.id === 'box_fan') systemAction('Place in the living room', () => game.placeFan(m));
+    if (e.id === 'aa_rechargeable') systemAction('Charge at the living room circuit', () => game.chargeSolar(m));
+    if (e.id === 'nebulizer') systemAction('Treat Theo at the living room circuit', () => game.useNebulizer(m));
     const others = game.family.filter((o) => o !== m && !o.dead);
     if (it.light) items.push({ label: it.light.placed ? 'Light and place here' : e.id === 'headlamp' ? 'Wear and switch on' : 'Hold and switch on',
       hint: e.id === 'candle' ? 'needs lighter or matches · adds heat' : 'needs AA batteries when flat', disabled: !m.canAct(), fn: () => game.lightItem(m, m.inv.indexOf(e)) });
@@ -329,6 +347,8 @@ const game = {
     if (!e || target.dead || !owner.canAct()) return;
     if (!game.near(owner, target)) { game.log(`${target.name} is too far away now.`, 'warn'); return; }
     const it = ITEMS[e.id];
+    if (e.id === 'radio_handcrank') return game.playRadio(owner);
+    if (e.id === 'nebulizer') return game.useNebulizer(owner);
     if (it.light) return owner === target && game.lightItem(owner, i);
     if (it.wear) return game.wearItem(owner, i, target);
     if (!it.use && !PER_L[e.id]) { game.log(itemHint(e.id)); return; }
@@ -426,12 +446,12 @@ const game = {
   },
   // nearest walkable indoor cell (or anywhere at night)
   nearestShade([sx, sy]) {
-    if (sim.sun() < 0.05 || map.isIndoor(sx, sy)) return [sx, sy];
+    if (sim.sun() < 0.05 || map.isIndoor(sx, sy) || game.systems.yardShade(sx, sy)) return [sx, sy];
     const seen = new Set([sy * map.W + sx]);
     const q = [[sx, sy]];
     while (q.length) {
       const [x, y] = q.shift();
-      if (map.walkable(x, y) && map.isIndoor(x, y) && map.get(x, y) !== 4 && map.get(x, y) !== 12) return [x, y];
+      if (map.walkable(x, y) && (game.systems.yardShade(x, y) || map.isIndoor(x, y) && map.get(x, y) !== 4 && map.get(x, y) !== 12)) return [x, y];
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const nx = x + dx, ny = y + dy, k = ny * map.W + nx;
         if (!seen.has(k) && map.walkable(nx, ny)) { seen.add(k); q.push([nx, ny]); }
@@ -452,9 +472,10 @@ const game = {
   // A job is a list of steps; the lead walks to each step's cells, waits for the whole crew, works `dur` minutes.
   startJob(lead, job) {
     job.i = 0;
-    if (!game.jobStep(lead, job)) return;
+    if (!game.jobStep(lead, job)) return false;
     for (const m of job.crew) if (m !== lead) m.order('help', lead);
     if (job.say) game.log(`${lead.name}: "${job.say}"`);
+    return true;
   },
   jobStep(lead, job) {
     const s = job.steps[job.i];
@@ -560,7 +581,7 @@ const game = {
   waterDays() {
     const alive = game.family.filter((m) => !m.dead);
     const perDay = alive.reduce((s, m) => s + m.lossRate(Math.max(sim.indoor, 90), 1) * 24, 0);
-    const carried = alive.flatMap((m) => m.inv).filter((e) => isLiquid(e) && PER_L[e.id]?.hydration >= 35).reduce((s, e) => s + e.left, 0);
+    const carried = [...alive.flatMap((m) => m.inv), ...map.objects.filter((o) => o.home && o.searched).flatMap((o) => o.items)].filter((e) => isLiquid(e) && PER_L[e.id]?.hydration >= 35).reduce((s, e) => s + e.left, 0);
     return { liters: sim.tubL + carried, perDay, days: perDay > 0 ? (sim.tubL + carried) / perDay : Infinity };
   },
 
@@ -576,6 +597,7 @@ const game = {
 };
 const ui = new UI(game);
 game.rng = rng;
+game.systems = new SurvivalSystems(game);
 
 // ---------------------------------------------------------------- selection + commands
 const rings = new Map();
@@ -612,6 +634,8 @@ function objectMenu(o, cx, cy) {
   const lead = group[0];
   if (!lead) { game.log('Pick someone first: click a family member or their card.', 'warn'); return; }
   const items = [];
+  if (o.site) { ui.menu(cx, cy, game.systems.menu(o, lead, group), o.name); return; }
+  if (o.car && o.home) items.push(...game.systems.carMenu(lead));
   const who = group.length > 1 ? `${lead.name}` : lead.name;
   if (o.kind === 'container') {
     if (o.unseen?.length) items.push({ label: `Search again (${who})`, hint: 'look for what was missed', fn: () => lead.useObject(o, 'search') });
@@ -639,7 +663,7 @@ function objectMenu(o, cx, cy) {
     }
   }
   for (const it of items) { const f = it.fn; if (f) it.fn = () => { const who = game.selected.find((m) => m.canAct()); if (!who || who.willObey()) f(); }; }
-  ui.menu(cx, cy, items, o.name + (o.home || o.lot < 0 ? '' : ` · ${map.lots[o.lot].name}`));
+  ui.menu(cx, cy, items, o.name + (o.car && o.home ? ` · ${o.fuelL.toFixed(1)} L` : '') + (o.home || o.lot < 0 ? '' : ` · ${map.lots[o.lot].name}`));
 }
 
 function memberMenu(v, cx, cy) {
@@ -695,7 +719,11 @@ function pick(ev) {
     if (u.obj) return { obj: u.obj };
   }
   const g = ray.intersectObject(world.pickPlane, false)[0];
-  if (g) return { cell: [Math.floor(g.point.x), Math.floor(g.point.z)] };
+  if (g) {
+    const cell = [Math.floor(g.point.x), Math.floor(g.point.z)];
+    const window = map.sites.find((s) => s.kind === 'window' && s.x === cell[0] && s.y === cell[1]);
+    return window ? { obj: window } : { cell };
+  }
   return null;
 }
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -784,6 +812,7 @@ function frame(now) {
     for (let s = 0; s < steps; s++) {
       sim.step(dtMin / steps);
       game.updateLights(dtMin / steps);
+      game.systems.update(dtMin / steps);
       for (const m of game.family) m.update(dtMin / steps, dtReal / steps);
       if (dtMin > 0) game.nightEvents.update();
     }
@@ -859,6 +888,45 @@ function rules() {
   }
 }
 
+// Clickable project markers stay below the cutaway wall height. Finished
+// geometry lives in the scene so it remains visible when roofs are hidden.
+function installBuildSites() {
+  const meshes = new Map();
+  function box(site, w, h, d, color, elevation = h / 2) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({ color }));
+    mesh.position.set(site.x + 0.5, elevation, site.y + 0.5);
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    mesh.userData.obj = site;
+    scene.add(mesh); world.pickables.push(mesh);
+    return mesh;
+  }
+  for (const site of map.sites) {
+    let mesh;
+    if (site.kind === 'window') mesh = box(site, site.axis === 'west' ? 1.04 : 0.8, 0.65, site.axis === 'west' ? 0.8 : 1.04, 0x648391, 0.65);
+    else if (site.kind === 'tarp') mesh = box(site, 0.14, 1.8, 0.14, 0x795d40);
+    else if (site.kind === 'grill') mesh = box(site, 0.9, 0.8, 0.8, 0x343638);
+    else if (site.kind === 'panel') mesh = box(site, 0.25, 0.9, 0.7, 0x6f7c83);
+    else if (site.kind === 'walt') mesh = box(site, 0.8, 0.8, 0.16, 0x728061);
+    else mesh = box(site, 0.65, 0.06, 0.65, 0x7495a0);
+    meshes.set(site.key, mesh);
+  }
+  game.systems.visual = (kind, site) => {
+    const mesh = meshes.get(site.key);
+    if (kind === 'shade') mesh.material.color.setHex(0xdce4e7);
+    if (kind === 'tarp') {
+      const roof = box(site, 4, 0.08, 3, 0x426f95, 2.1);
+      roof.position.x += 0.5;
+      for (const [dx, dz] of [[-1.4, -1.4], [2.4, -1.4], [-1.4, 1.4], [2.4, 1.4]]) {
+        const post = box(site, 0.1, 2.1, 0.1, 0x795d40);
+        post.position.x += dx; post.position.z += dz;
+      }
+    }
+    if (kind === 'solar') { mesh.material.color.setHex(0x5a9f75); box({ ...site, x: site.x - 1 }, 0.7, 0.6, 0.7, 0x3b454d); }
+    if (kind === 'fan') { mesh.scale.y = 12; mesh.position.y = 0.6; mesh.material.color.setHex(0xc1d2ce); }
+    if (kind === 'grill') mesh.material.color.setHex(0x8b5c3c);
+  };
+}
+
 // ---------------------------------------------------------------- boot
 {
   const fig = makeFigure();
@@ -866,6 +934,7 @@ function rules() {
   const box = new THREE.Box3().setFromObject(fig.scene);
   const baseH = box.max.y - box.min.y;
   for (const def of FAMILY) game.family.push(new Member(def, fig, baseH, game));
+  installBuildSites();
   game.nightEvents = new NightEvents(game);
   game.nightEvent = (id, watched) => game.nightEvents.trigger(id, watched);
   game.selected = [game.family[0]];

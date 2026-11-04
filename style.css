@@ -19,13 +19,14 @@ button:disabled { opacity: 0.45; cursor: default; }
 .warn { color: var(--warn); } .bad { color: var(--bad); } .good { color: var(--good); } .ok { color: var(--dim); }
 
 #hud > div { position: fixed; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
-#top { top: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 16px; align-items: center; padding: 6px 12px; white-space: nowrap; }
+#top { top: 10px; left: 256px; right: 290px; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; padding: 6px 12px; }
 #clock { font-size: 15px; font-variant-numeric: tabular-nums; }
 #speed button { padding: 2px 8px; margin: 0 1px; }
 #speed button.on { background: #5a4a30; border-color: var(--sel); }
-#env span { margin-left: 12px; font-variant-numeric: tabular-nums; }
+#env { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; }
+#env span { font-variant-numeric: tabular-nums; }
 
-#objectives { top: 56px; left: 50%; transform: translateX(-50%); padding: 5px 12px; font-size: 12px; color: var(--dim); display: flex; gap: 18px; }
+#objectives { top: 116px; left: 256px; right: 290px; padding: 5px 12px; font-size: 12px; color: var(--dim); display: flex; flex-wrap: wrap; gap: 4px 14px; }
 #objectives .done { color: var(--good); text-decoration: line-through; }
 #objectives .failed { color: var(--bad); }
 
@@ -77,7 +78,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .tag.dead { color: #bbb; background: rgba(0, 0, 0, 0.7); }
 .tag i { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--sel); }
 
-#menu { position: fixed; z-index: 20; background: #1b1815; border: 1px solid rgba(255, 235, 200, 0.25); border-radius: 5px; padding: 4px; min-width: 210px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6); }
+#menu { max-height: calc(100vh - 16px); max-width: calc(100vw - 16px); overflow-y: auto; position: fixed; z-index: 20; background: #1b1815; border: 1px solid rgba(255, 235, 200, 0.25); border-radius: 5px; padding: 4px; min-width: 210px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6); }
 #menu .mt { font-size: 11px; color: var(--dim); padding: 3px 6px 5px; border-bottom: 1px solid var(--line); margin-bottom: 3px; }
 #menu button { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 5px 8px; }
 #menu button:hover:not(:disabled) { background: #3a332c; }
@@ -95,3 +96,9 @@ button:disabled { opacity: 0.45; cursor: default; }
 
 .equipment { color: var(--dim); font-size: 11px; margin: 3px 0; }
 .equipment-control { width: 100%; margin: 3px 0 7px; text-align: left; font-size: 12px; }
+
+@media (max-width: 1100px) {
+  #top, #objectives { left: 256px; right: 10px; }
+  #side { top: 235px; max-height: calc(100vh - 245px); }
+  #objectives { top: 122px; }
+}

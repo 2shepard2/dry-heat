@@ -73,7 +73,9 @@ export class UI {
       `<span class="${ins >= 95 ? 'bad' : ins >= 88 ? 'warn' : ''}">Inside ${ins}°F</span>` +
       `<span class="${water === 'dead' ? 'bad' : water === 'sputtering' ? 'warn' : ''}">Taps: ${water}</span>` +
       (() => { const w = g.waterDays(); const d = w.days; const cls = d < 2 ? 'bad' : d < 4 ? 'warn' : '';
-        return `<span class="${cls}" title="Tub plus carried water, at today's indoor rate (${w.perDay.toFixed(1)} L/day for the family)">Water: ${Math.round(w.liters)} L ≈ ${isFinite(d) ? d.toFixed(1) : '∞'} days</span>`; })();
+        return `<span class="${cls}" title="Tub, carried and discovered home water, at today's indoor rate (${w.perDay.toFixed(1)} L/day for the family)">Water: ${Math.round(w.liters)} L ≈ ${isFinite(d) ? d.toFixed(1) : '∞'} days</span>`; })() +
+      `<span>Car: ${g.systems.car.fuelL.toFixed(1)} L${g.systems.car.running ? ' · AC on' : ''}</span>` +
+      `<span>Window shade: ${Math.min(3, g.systems.shades.size)}/3 effective · Solar: ${Math.round(g.systems.watts())} W${g.systems.solar.fan ? ' · fan placed' : ''}</span>`;
     for (const b of document.querySelectorAll('#speed button')) b.classList.toggle('on', Number(b.dataset.s) === sim.speed);
 
     // objectives
