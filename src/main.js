@@ -4,6 +4,8 @@ import { makeFigure } from './figure.js';
 import { buildMap, T } from './map.js';
 import { buildWorld } from './build.js';
 import { Sim } from './sim.js';
+import { Prologue } from './beats.js';
+import { prologueScene } from './prologue-scene.js';
 import { NightEvents } from './events.js';
 import { SurvivalSystems } from './systems.js';
 import { Member, FAMILY } from './family.js';
@@ -29,7 +31,7 @@ $('#app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const map = buildMap();
-const sim = new Sim();
+const sim = new Sim({ phase: 'prologue' });
 
 // isometric orthographic camera that orbits in 90° steps
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 400);
@@ -75,6 +77,7 @@ function updateLight() {
   hemi.intensity = 0.035 + 1.05 * Math.min(1, s * 2.2);
   hemi.color.setHex(0x2a3858).lerp(C(0xdde6ee), Math.min(1, s * 1.5));
   moon.intensity = 0.065 * (1 - Math.min(1, s * 4));
+  if (game.auroraOn) { hemi.intensity = .32; hemi.color.setHex(0x839cac); moon.intensity = .22; }
   const bg = SKY.night.clone();
   if (s > 0) bg.copy(SKY.dawn).lerp(SKY.day, Math.min(1, s * 2.5)).lerp(SKY.haze, Math.max(0, s - 0.6));
   scene.background = bg;
@@ -100,7 +103,7 @@ const game = {
     { id: 'tub', text: 'Fill the bathtub while the taps still run' },
     { id: 'look', text: 'Search the house for supplies' },
     { id: 'shade', text: 'Shade a west or south window (foil or windshield shade)' },
-    { id: 'solar', text: 'Visit Walt, find Pruitt’s RV battery, build a small circuit' },
+    { id: 'solar', text: 'Ask Walt about the panels' },
     { id: 'night', text: 'Keep everyone alive until nightfall (8 PM)' },
   ],
   log: (t, k) => ui.log(t, k),
@@ -131,6 +134,7 @@ const game = {
     return true;
   },
   isDark(m) {
+    if (sim.power) return false;
     return sim.sun() < 0.08 && map.isIndoor(...m.cell())
       && !game.lights.some((l) => game.lightReaches(l, m.pos.x, m.pos.z));
   },
@@ -634,6 +638,14 @@ function objectMenu(o, cx, cy) {
   const lead = group[0];
   if (!lead) { game.log('Pick someone first: click a family member or their card.', 'warn'); return; }
   const items = [];
+  if (sim.phase === 'prologue') {
+    const d = game.beats.current?.do;
+    const target = o.beatTargets?.find((t) => t === d?.target) || (o.car && d?.type === 'trip' ? 'car' : o.beatTargets?.[0]);
+    const relevant = target && (d?.target === target || (target === 'car' && d?.type === 'trip'));
+    const labels = { use: 'Use', order: 'Ask to use', together: 'Help together at', walk: 'Walk to', trip: d?.label || 'Drive to' };
+    ui.menu(cx, cy, [{ label: relevant ? `${labels[d.type] || 'Look at'} ${o.name}` : o.name, disabled: !relevant, fn: () => game.beats.interact(target, group) }], o.name); return;
+  }
+  if (o.prologueProp) { ui.menu(cx, cy, [{ label: o.name, disabled: true }], o.name); return; }
   if (o.site) { ui.menu(cx, cy, game.systems.menu(o, lead, group), o.name); return; }
   if (o.car && o.home) items.push(...game.systems.carMenu(lead));
   const who = group.length > 1 ? `${lead.name}` : lead.name;
@@ -667,6 +679,11 @@ function objectMenu(o, cx, cy) {
 }
 
 function memberMenu(v, cx, cy) {
+  const d = game.beats?.current?.do;
+  if (sim.phase === 'prologue' && ((d?.type === 'order' && d.kid === v.id) || (d?.type === 'use' && ((d.target === 'inhaler' && v.id === 'theo') || d.who === v.id)))) {
+    const who = d.who ? game.family.filter((m) => m.id === d.who) : game.selected;
+    ui.menu(cx, cy, [{ label: d.type === 'order' ? `${v.name}: ${d.target === 'car' ? 'Get in the car' : 'Wash dishes'}` : d.target === 'inhaler' ? 'Give Theo the inhaler' : `Use ${game.beats.targets[d.target]?.name || d.target}`, fn: () => game.beats.interact(d.target, who) }], v.name); return;
+  }
   const helpers = game.selected.filter((m) => m !== v && m.canAct());
   const items = v.ai ? [] : [{ label: `Select ${v.name}`, disabled: v.dead, fn: () => select(v, false) }];
   const boss = helpers[0];
@@ -712,7 +729,7 @@ let world;
 function pick(ev) {
   ndc.set((ev.clientX / innerWidth) * 2 - 1, -(ev.clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(ndc, camera);
-  const hits = ray.intersectObjects([...game.family.map((m) => m.hit), ...world.pickables], false);
+  const hits = ray.intersectObjects([...game.family.filter((m) => !m.away).map((m) => m.hit), ...world.pickables.filter((o) => o.visible && !o.userData.obj?.away)], false);
   if (hits.length) {
     const u = hits[0].object.userData;
     if (u.member) return { member: u.member };
@@ -754,7 +771,7 @@ renderer.domElement.addEventListener('wheel', (e) => {
 
 const keys = new Set();
 addEventListener('keydown', (e) => {
-  if (!started) return;
+  if (!started || game.cutting || game.beats.paused) return;
   keys.add(e.key.toLowerCase());
   const k = e.key.toLowerCase();
   if (k === ' ') { e.preventDefault(); sim.speed = sim.speed ? 0 : (game.lastSpeed || 1); }
@@ -774,6 +791,7 @@ addEventListener('keydown', (e) => {
   }
   if (k === 'a' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); game.selected = game.family.filter((m) => !m.dead && !m.ai); }
   if (k === 'h' && !e.repeat) for (const m of game.selected) m.keepWatch();
+  if (k === 'z' && sim.phase === 'prologue' && game.beats.sleep()) return;
   if (k === 'z') for (const m of game.selected) if (m.canAct()) { m.stopTask(true); m.goal = { type: 'sleep', obj: null }; m.startTask(); }
   if (k === 'f') game.focusOn(game.selected[0]);
   if (k === 'escape') { ui.hideMenu(); for (const m of game.selected) game.opens.delete(m); }
@@ -806,17 +824,18 @@ function frame(now) {
   placeCamera();
 
   if (started && !game.over) {
-    const dtMin = dtReal * sim.speed; // 1 real second = 1 game minute at 1x
+    const dtMin = dtReal * (game.beats.paused || game.cutting ? 0 : sim.speed); // 1 real second = 1 game minute at 1x
     // sub-step the body sim at high speed so thresholds aren't skipped
     const steps = Math.max(1, Math.ceil(dtMin / 2));
     for (let s = 0; s < steps; s++) {
       sim.step(dtMin / steps);
       game.updateLights(dtMin / steps);
-      game.systems.update(dtMin / steps);
+      if (sim.phase === 'outage') game.systems.update(dtMin / steps);
       for (const m of game.family) m.update(dtMin / steps, dtReal / steps);
-      if (dtMin > 0) game.nightEvents.update();
+      if (dtMin > 0 && sim.phase === 'outage') game.nightEvents.update();
     }
-    rules();
+    game.beats.update(dtMin, dtReal);
+    if (sim.phase === 'outage' && !game.cutting) rules();
   }
 
   // cut away the upper walls + roof of any house with family inside
@@ -837,7 +856,7 @@ function frame(now) {
       scene.add(r);
       rings.set(m, r);
     }
-    r.visible = game.selected.includes(m) && !m.dead;
+    r.visible = game.selected.includes(m) && !m.dead && !m.away;
     r.position.set(m.pos.x, 0.03 + (m.asleep && m.bed ? 0.55 : 0), m.pos.z);
     r.scale.setScalar(1 + 0.12 * Math.sin(now / 180));
   }
@@ -864,6 +883,7 @@ function frame(now) {
   }
 
   game.updateLights(0);
+  game.prologueVisual.update(now / 1000);
   updateLight();
   renderer.render(scene, camera);
   if (started) {
@@ -935,6 +955,41 @@ function installBuildSites() {
   const baseH = box.max.y - box.min.y;
   for (const def of FAMILY) game.family.push(new Member(def, fig, baseH, game));
   installBuildSites();
+  const outageObjectives = game.objectives.map((o) => ({ ...o }));
+  game.prologueVisual = prologueScene(game, scene, cam);
+  game.beats = new Prologue(game, {
+    present(choice) {
+      let card = $('#beat-choice');
+      if (!card) { card = document.createElement('div'); card.id = 'beat-choice'; document.body.appendChild(card); }
+      card.replaceChildren(); card.classList.toggle('hidden', !choice);
+      if (!choice) return;
+      const box = document.createElement('div'); box.className = 'box';
+      const prompt = document.createElement('p'); prompt.textContent = choice.prompt; box.appendChild(prompt);
+      for (const option of choice.options) {
+        const button = document.createElement('button'); button.textContent = option.label;
+        button.onclick = () => game.beats.pick(option.value); box.appendChild(button);
+      }
+      card.appendChild(box);
+    },
+    aurora: (on, beat) => { game.auroraOn = on; game.prologueVisual.set(on, beat); },
+    cut() {
+      game.objectives = outageObjectives.map((o) => ({ ...o }));
+      game.cutting = true;
+      const fade = document.createElement('div'); fade.id = 'outage-cut'; fade.textContent = '5:40 AM'; document.body.appendChild(fade);
+      requestAnimationFrame(() => fade.classList.add('black'));
+      setTimeout(() => {
+        game.log('Day 1. The power went out at 5:40 AM across the whole valley. The AC is silent.', 'warn');
+        game.log('Water still comes out of the taps, for now. Fill the bathtub.', 'warn');
+        fade.classList.remove('black'); game.cutting = false; ui.refresh();
+        setTimeout(() => fade.remove(), 1200);
+      }, 2200);
+    },
+  });
+  for (const prop of map.prologueProps) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(prop.key === 'desk' ? 1 : .4, prop.key === 'sprinkler' ? .18 : .7, .45), new THREE.MeshLambertMaterial({ color: prop.key === 'coffee' ? 0x353b3a : 0x8c806d }));
+    mesh.position.set(prop.x + .5, .35, prop.y + .5); mesh.userData.obj = prop;
+    scene.add(mesh); world.pickables.push(mesh);
+  }
   game.nightEvents = new NightEvents(game);
   game.nightEvent = (id, watched) => game.nightEvents.trigger(id, watched);
   game.selected = [game.family[0]];
@@ -946,15 +1001,15 @@ function installBuildSites() {
   requestAnimationFrame(frame);
 }
 
-$('#begin').addEventListener('click', () => {
+function begin(skip = false) {
   $('#intro').classList.add('hidden');
   $('#hud').classList.remove('hidden');
-  started = true;
-  last = performance.now();
-  game.log('Day 1. The power went out at 5:40 AM across the whole valley. The AC is silent.', 'warn');
-  game.log('Water still comes out of the taps, for now. Fill the bathtub.', 'warn');
+  started = true; last = performance.now();
+  if (skip) game.beats.outage(true); else game.beats.start();
   ui.refresh();
-});
+}
+$('#begin').addEventListener('click', () => begin());
+$('#skip').addEventListener('click', () => begin(true));
 $('#restart').addEventListener('click', () => location.reload());
 
 window.__game = game; // test hook

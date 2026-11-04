@@ -22,6 +22,7 @@ const { ITEMS, makeEntry, addEntry, isSpoiled } = await import('./inventory.js')
 const { SurvivalSystems } = await import('./systems.js');
 const { NightEvents } = await import('./events.js');
 const { flagsMatch } = await import('./conditions.js');
+const { Prologue, mapBeatTargets, beatMinute } = await import('./beats.js');
 
 function fixture(decisions) {
   const messages = [];
@@ -116,7 +117,10 @@ test('two car seats, 2.5 L/hour, 78°F cooling, no cooling after exit or empty t
   const before = s.car.fuelL; s.update(60);
   assert.equal(before - s.car.fuelL, 2.5);
   m.updateBody(0); assert.equal(m.felt, 78);
-  m.moveTo(30, 17); assert.equal(s.carCooling(m), false);
+  assert.ok(m.pos.x > s.car.x && m.pos.x < s.car.x + s.car.w);
+  assert.ok(m.pos.z > s.car.y && m.pos.z < s.car.y + s.car.h);
+  assert.ok(m.moveTo(30, 17)); assert.equal(s.carCooling(m), false);
+  assert.ok(g.map.walkable(...m.cell()));
   s.car.fuelL = 0.01; s.update(1);
   assert.equal(s.car.fuelL, 0); assert.equal(s.car.running, false); assert.equal(s.occupants().length, 0);
   m.stopTask(); s.car.fuelL = 14;
@@ -188,7 +192,10 @@ test('radio is reusable, plays oldest due once; events enforce maxDay and decisi
   const { g, s, m, messages } = fixture();
   give(m, 'radio_handcrank'); assert.ok(g.playRadio(m)); finish(m);
   assert.equal(s.heard.has('roads-jammed'), true);
-  assert.ok(g.playRadio(m)); finish(m); assert.equal(s.heard.size, 1);
+  assert.ok(g.playRadio(m)); finish(m);
+  assert.equal(s.heard.size, 2);
+  assert.equal(s.heard.has('eas-heat-advisory'), true);
+  assert.ok(g.playRadio(m)); finish(m); assert.equal(s.heard.size, 2);
   assert.ok(m.inv.some((e) => e.id === 'radio_handcrank'));
   assert.equal(g.line('missing.silent'), false);
   assert.equal(g.line('marcus.solar.dead'), true);
@@ -198,4 +205,136 @@ test('radio is reusable, plays oldest due once; events enforce maxDay and decisi
   assert.equal(events.eligible(event), true);
   g.decisions.gas = 'full'; assert.equal(events.eligible(event), false);
   g.decisions.gas = 'quarter'; g.sim.min = 2 * 1440; assert.equal(events.eligible(event), false);
+});
+
+
+function prologue(beats) {
+  const f = fixture();
+  f.g.sim = new Sim({ phase: 'prologue' });
+  f.g.selected = [f.m];
+  const choices = [];
+  f.b = new Prologue(f.g, { ...(beats ? { beats } : {}), present: (c) => choices.push(c) });
+  f.choices = choices; f.b.start(); return f;
+}
+const flushLines = (b) => { for (let i = 0; i < 20; i++) b.update(0, 2); };
+
+test('seed p1 completes through the real coffee use task; all targets are reachable', () => {
+  const { g, b, m } = prologue();
+  assert.equal(g.sim.day, -1); assert.equal(g.sim.clock(), '7:15 AM');
+  assert.equal(g.sim.dateLabel(), 'Thursday, July 9');
+  assert.equal(g.sim.speed, 4); assert.equal(g.sim.power, true);
+  for (const [key, o] of Object.entries(b.targets)) {
+    assert.ok(m.useObject(o, 'prologue', { target: key, beatType: 'use' }), key);
+    m.stopTask(true);
+  }
+  assert.equal(b.notify('use', 'elena', 'coffee'), false);
+  assert.ok(b.interact('coffee', [m])); finish(m); flushLines(b);
+  assert.ok(b.completed.has('p1'));
+});
+
+test('choice sets a decision, costs time, preserves delayed follow-up lines and sets flags', () => {
+  const beat = { id: 'choice', day: 0, at: 600, objectives: ['Buy groceries'], sets: ['shopped'],
+    do: { type: 'choice', flag: 'cart', prompt: 'One thing goes back.', options: [
+      { value: 'birthday', label: 'The birthday things', minutes: 8, lines: [{ who: 'elena', text: 'Okay.' }] },
+      { value: 'water', label: 'The water' } ] } };
+  const { g, b, choices, messages } = prologue([beat]);
+  const start = g.sim.min;
+  assert.equal(b.paused, true); assert.equal(choices.at(-1).flag, 'cart');
+  assert.equal(g.pickChoice('invalid'), false);
+  assert.ok(g.pickChoice('birthday')); assert.equal(g.sim.min, start + 8);
+  assert.deepEqual(g.readDecisions(), { cart: 'birthday' });
+  flushLines(b); assert.equal(g.flags.shopped, true);
+  assert.ok(messages.includes('Elena: "Okay."'));
+});
+
+test('skip supplies defaults and lands at day 1, Saturday 5:40 AM with power out', () => {
+  const { g, b } = prologue();
+  g.decisions.gas = 'full';
+  assert.ok(g.skipToOutage());
+  assert.deepEqual(g.readDecisions(), { gas: 'quarter', jugs: 'shelf', cart: 'water', walt: 'walked' });
+  assert.equal(g.sim.phase, 'outage'); assert.equal(g.sim.day, 1); assert.equal(g.sim.min, 340);
+  assert.equal(g.sim.clock(), '5:40 AM'); assert.equal(g.sim.power, false);
+  assert.match(g.sim.dateLabel(), /Saturday, July 11/);
+  assert.equal(g.systems.car.fuelL, 14); assert.equal(g.systems.car.running, false);
+  const stock = [makeEntry('water_case')];
+  g.systems.stock(b.targets.pantry, stock); assert.equal(stock.some((e) => e.id === 'water_case'), false);
+  assert.equal(g.skipToOutage(), false);
+});
+
+test('all three cart outcomes and jugs/gas/Walt are applied at the cut', () => {
+  for (const cart of ['water', 'pharmacy', 'birthday']) {
+    const { g, b } = prologue();
+    Object.assign(g.decisions, { cart, gas: 'full', jugs: 'recycled', walt: 'wavedOff' });
+    b.targets['garage-shelf'].items.push(makeEntry('water_gallon'));
+    const oldMorale = g.family.find((m) => m.id === 'jess').needs.morale;
+    b.outage();
+    const all = g.map.objects.filter((o) => o.home).flatMap((o) => o.items);
+    for (const [choice, id] of [['water', 'water_case'], ['pharmacy', 'inhaler_spare'], ['pharmacy', 'bp_refill'], ['birthday', 'birthday_jess']]) {
+      assert.equal(all.some((e) => e.id === id), choice !== cart, `${cart}: ${id}`);
+    }
+    assert.equal(all.some((e) => e.id === 'water_gallon'), false);
+    assert.equal(g.systems.car.fuelL, 55); assert.equal(g.systems.walt.trust, 0);
+    assert.equal(g.family.find((m) => m.id === 'jess').needs.morale, oldMorale - (cart === 'birthday' ? 12 : 0));
+  }
+});
+
+test('trip hides the car and its crew for the specified minutes, then restores both', () => {
+  const { g, b } = prologue([{ id: 'trip', day: -1, at: 500, do: { type: 'trip', who: ['marcus', 'elena'], target: 'store', minutes: 30, label: 'Grocery run' } }]);
+  b.targets.car.mesh = { visible: true };
+  assert.ok(b.interact('car')); assert.equal(b.targets.car.mesh.visible, false);
+  assert.equal(g.map.walkable(b.targets.car.x, b.targets.car.y), true);
+  assert.ok(g.family.slice(0, 2).every((m) => m.away && !m.obj.visible));
+  g.sim.step(29); b.update(29, 0); assert.ok(b.trip);
+  g.sim.step(1); b.update(1, 2);
+  assert.equal(b.trip, null); assert.equal(b.targets.car.mesh.visible, true);
+  assert.equal(g.map.walkable(b.targets.car.x, b.targets.car.y), false);
+  assert.ok(g.family.every((m) => !m.away && m.obj.visible)); assert.ok(b.completed.has('trip'));
+});
+
+test('together requires both parents; child order completes only with the named child', () => {
+  const { g, b, m, e } = prologue([
+    { id: 'team', day: -1, at: 435, do: { type: 'together', target: 'store' } },
+    { id: 'kid', day: -1, at: 440, do: { type: 'order', kid: 'jess', target: 'sink' } },
+  ]);
+  assert.equal(b.interact('store', [m]), false);
+  assert.ok(b.interact('store', [m, e])); arrive(m); arrive(e); finish(m); assert.equal(b.pending, false); finish(e); flushLines(b);
+  assert.ok(b.completed.has('team'));
+  assert.equal(b.notify('order', 'theo', 'sink'), false);
+  assert.ok(b.interact('sink', [m])); finish(g.family.find((m) => m.id === 'jess')); flushLines(b);
+  assert.ok(b.completed.has('kid'));
+});
+
+test('sleep rolls to Friday, optional beat times out, wait P15 cuts to outage', () => {
+  const { g, b } = prologue([
+    { id: 'bed', day: -1, at: 1380, do: { type: 'sleep' } },
+    { id: 'sky', day: 0, at: 1320, optional: true, timeout: 3, sets: ['sawSky'], do: { type: 'walk', target: 'street' } },
+    { id: 'end', day: 0, at: 1380, outage: true, do: { type: 'wait', minutes: 2 } },
+  ]);
+  assert.ok(b.sleep()); b.update(0, 2);
+  assert.equal(g.sim.day, 0); assert.equal(g.sim.dateLabel(), 'Friday, July 10');
+  b.update(3, 2); assert.equal(g.flags.sawSky, true);
+  b.update(2, 2); assert.equal(g.sim.phase, 'outage'); assert.equal(g.sim.min, 340);
+});
+
+test('prologue stays safe through a long wait; windows finish indoors, status never empty', () => {
+  const { g, b, m } = prologue();
+  g.sim.step(1440); m.updateBody(1440);
+  assert.equal(g.sim.day, -1); assert.equal(g.sim.indoor, 78); assert.equal(g.sim.pressure(), 1);
+  assert.equal(m.needs.health, 100); assert.equal(m.bodyT, 98.6); assert.ok(m.needs.energy >= 60);
+  assert.equal(m.dead, false); assert.equal(m.collapsed, false);
+  b.outage(); give(m, 'aluminum_foil');
+  assert.ok(g.shadeWindow(m, 'west-bedroom')); finish(m);
+  assert.equal(g.map.isIndoor(...m.cell()), true); assert.equal(g.sim.shadedWindows, 1);
+  assert.equal(m.doing(), 'Idle');
+});
+
+
+test('optional choice expires and named child use is supported', () => {
+  const { g, b } = prologue([
+    { id: 'optional', day: -1, at: 435, optional: true, timeout: 5, do: { type: 'choice', flag: 'walt', options: [{ value: 'walked', label: 'Walk him home' }] } },
+    { id: 'child-use', day: -1, at: 440, do: { type: 'use', who: 'theo', target: 'sprinkler' } },
+  ]);
+  assert.equal(b.paused, false); b.update(5, 2); assert.ok(b.completed.has('optional'));
+  assert.ok(b.interact('sprinkler')); finish(g.family.find((m) => m.id === 'theo')); flushLines(b);
+  assert.ok(b.completed.has('child-use'));
 });

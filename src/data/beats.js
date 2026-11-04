@@ -46,11 +46,364 @@ export const BEATS = [
     id: 'p1', day: -1, at: 7 * 60 + 15,
     objectives: ['Make coffee', 'Get Theo to day camp', 'Finish the Hendricks deck by noon'],
     lines: [
+      { who: 'elena', text: 'Your lunch is in the blue bag. The ice pack is on the left.' },
       { who: 'elena', text: 'Eggs are four dollars now. Four.' },
       { who: 'marcus', text: 'We have the panels. Something has to be saving us money.' },
       { who: 'elena', text: 'A hundred and forty a month says it isn\'t.' },
     ],
+    log: 'The coffee maker gurgles and gives up. The kitchen is the cool part of the house.',
     teach: 'Click Marcus to select him. Right-click to walk. Click furniture for actions.',
     do: { type: 'use', who: 'marcus', target: 'coffee' },
+    sets: ['leaseTalk'],
+  },
+
+  {
+    id: 'p2', day: -1, at: 7 * 60 + 30,
+    objectives: ['Get Theo to day camp', 'Take the nine o\'clock call', 'Finish the Hendricks deck by noon'],
+    lines: [
+      { who: 'theo', text: 'I have a stomachache.' },
+      { who: 'elena', text: 'You have a stomachache that starts on Wednesdays.' },
+      { who: 'elena', text: 'Can you take him? I have the dentist at nine.' },
+      { who: 'marcus', text: 'I have got a call at nine.' },
+      { who: 'elena', text: 'You had the nine o\'clock last week.' },
+    ],
+    log: 'Nobody moves for a second. Marcus looks at the clock. Then Theo puts his shoes on without being told.',
+    teach: 'Click Theo, then choose "Get in the car."',
+    do: { type: 'order', kid: 'theo', target: 'car' },
+    sets: ['theoToCamp'],
+  },
+
+  {
+    id: 'p3', day: -1, at: 8 * 60 + 30,
+    objectives: ['Finish the Hendricks deck', 'Take the two o\'clock call', 'Get Theo from camp at three'],
+    lines: [
+      { who: 'elena', text: 'Is that the Hendricks thing again?' },
+      { who: 'marcus', text: 'It is fine. It is just restructuring.' },
+      { who: 'elena', text: 'You said that in April.' },
+      { who: 'marcus', text: 'Then it is still fine.' },
+    ],
+    log: 'She stands in the doorway a while. Then she goes out and pulls the door to without letting it click.',
+    teach: 'Click the desk to work. The clock moves on its own while you do.',
+    do: { type: 'use', who: 'marcus', target: 'desk' },
+    sets: ['hendricksDeck'],
+  },
+
+  {
+    id: 'p4', day: -1, at: 12 * 60,
+    objectives: ['Ask Jess to do the dishes', 'Pick Theo up from camp', 'Finish the Hendricks deck'],
+    lines: [
+      { who: 'elena', text: 'Ask Jess to do the dishes.' },
+      { who: 'marcus', text: 'You can ask her.' },
+      { who: 'elena', text: 'She does not listen to me. She would listen to you.' },
+      { who: 'jess', text: 'Sure. I will do them now. I will do them great.' },
+    ],
+    log: 'There are two plates in the sink at four in the afternoon and they are not clean.',
+    teach: 'Click Jess, then choose an order. She gets to it when she feels like it.',
+    do: { type: 'order', kid: 'jess', target: 'sink' },
+    sets: ['jessDidDishes'],
+  },
+
+  {
+    id: 'p4a', day: -1, at: 13 * 60 + 50,
+    objectives: ['Take the two o\'clock call', 'Get Theo from camp at three', 'Answer the client email'],
+    lines: [
+      { who: 'walt', text: 'Which one is mine? They have moved them again.' },
+      { who: 'marcus', text: 'The blue one, Walt. Third from the corner.' },
+      { who: 'walt', text: 'I have to get there before the mail comes.' },
+      { who: 'marcus', text: 'It is ten to two. I have a call at two.' },
+    ],
+    log: 'Walt is in his slippers in the middle of the street with a letter opener in his hand.',
+    do: {
+      type: 'choice', flag: 'walt',
+      prompt: 'Walt is looking for his mailbox. You have a call at two.',
+      options: [
+        {
+          value: 'walked', label: 'Walk him home', minutes: 20,
+          lines: [
+            { who: 'walt', text: 'That is all right. You did not have to.' },
+            { who: 'marcus', text: 'It is four doors.' },
+          ],
+          log: 'Twenty minutes. The call is already running when he gets back in the door.',
+        },
+        {
+          value: 'wavedOff', label: 'You\'re fine, Walt', minutes: 5,
+          lines: [
+            { who: 'walt', text: 'I am fine. I am looking for my mailbox.' },
+            { who: 'marcus', text: 'Sure.' },
+          ],
+          log: 'He goes in. Walt is still at the curb when the door shuts.',
+        },
+      ],
+    },
+    sets: ['sawWalt'],
+  },
+
+  {
+    id: 'p5', day: -1, at: 14 * 60 + 30,
+    objectives: ['Move the jugs off the high shelf', 'Clear the garage floor for Saturday', 'Answer the client email'],
+    lines: [
+      { who: 'elena', text: 'Why do we have so many of these?' },
+      { who: 'marcus', text: 'Because of the monsoon thing in nineteen.' },
+      { who: 'marcus', text: 'Ten of them are still full.' },
+      { who: 'elena', text: 'I know how many of them are full.' },
+    ],
+    log: 'Fourteen gallon jugs, ten full and four half, on the shelf above the tool chest.',
+    do: {
+      type: 'choice', flag: 'jugs',
+      prompt: 'Elena wants the garage floor for the second car. The jugs have to go somewhere.',
+      options: [
+        {
+          value: 'shelf', label: 'Put them on the shelf by the door', minutes: 10,
+          lines: [
+            { who: 'marcus', text: 'They fit under the shelf by the door.' },
+            { who: 'elena', text: 'Good. Thank you.' },
+          ],
+          log: 'Two trips up and down the ladder. All fourteen end up by the door.',
+        },
+        {
+          value: 'recycled', label: 'Recycle the jugs', minutes: 15,
+          lines: [
+            { who: 'elena', text: 'The truck comes Friday morning.' },
+            { who: 'marcus', text: 'Then they will be gone by nine.' },
+          ],
+          log: 'Two trips to the curb, and the garage floor is bare.',
+        },
+      ],
+    },
+    sets: ['touchedJugs'],
+  },
+
+  {
+    id: 'p6', day: -1, at: 17 * 60,
+    objectives: ['Check the pantry', 'Update the list on the fridge', 'Get dinner started'],
+    lines: [
+      { who: 'marcus', text: 'We are half out. The list on the fridge has most of it crossed off.' },
+      { who: 'elena', text: 'I am not going until Saturday.' },
+      { who: 'marcus', text: 'Then we will eat pasta.' },
+    ],
+    log: 'She does not answer. The crossed-off lines on the list have prices next to them.',
+    teach: 'Click the pantry to see what is left in it.',
+    do: { type: 'use', who: 'marcus', target: 'pantry' },
+    sets: ['checkedPantry'],
+  },
+
+  {
+    id: 'p7', day: -1, at: 19 * 60 + 30,
+    objectives: ['Say hello to Mr. Pruitt', 'Water the plants', 'Get the hose back'],
+    lines: [
+      { who: 'pruitt', text: 'Hosing the driveway. It does not help. It looks like it helps.' },
+      { who: 'marcus', text: 'That tarp. Is that a generator?' },
+      { who: 'pruitt', text: 'That is a generator. It has not run since May.' },
+      { who: 'marcus', text: 'No gas in it?' },
+      { who: 'pruitt', text: 'No gas. And the HOA wants to talk about the tarp.' },
+    ],
+    log: 'He hoses the same four feet of driveway over and over. The water is hot enough to steam.',
+    teach: 'Walk to the gate and click the neighbour to talk.',
+    do: { type: 'walk', who: 'marcus', target: 'pruitt-gate' },
+    sets: ['sawPruitt'],
+  },
+
+  {
+    id: 'p8', day: -1, at: 22 * 60,
+    objectives: ['Finish a chapter', 'Lock up', 'Go to bed'],
+    lines: [
+      { who: 'elena', text: 'I am going up.' },
+      { who: 'marcus', text: 'Okay.' },
+      { who: 'theo', text: 'Can the fan stay on?' },
+      { who: 'marcus', text: 'The fan stays on.' },
+    ],
+    log: 'The bedroom door is closed. It was open on Tuesday.',
+    teach: 'Press Z to send everyone to bed and turn the day over.',
+    do: { type: 'sleep' },
+    sets: ['bedroomDoorClosed'],
+  },
+
+  {
+    id: 'p9', day: 0, at: 7 * 60 + 40,
+    objectives: ['Check the inhaler', 'Make breakfast', 'Get Theo to camp'],
+    lines: [
+      { who: 'elena', text: 'It is almost empty. Did we refill this?' },
+      { who: 'marcus', text: 'I thought you did.' },
+      { who: 'elena', text: 'Well. I thought you did.' },
+      { who: 'theo', text: 'I am fine. It only happens when I run.' },
+    ],
+    log: 'The blue one in the kitchen drawer gives about one more puff. The other one is in the Camry, in the glove box.',
+    teach: 'Click the inhaler, then choose who gives it to him.',
+    do: { type: 'use', who: 'theo', target: 'inhaler' },
+    sets: ['inhalerChecked'],
+  },
+
+  {
+    id: 'p10', day: 0, at: 9 * 60 + 30,
+    objectives: ['Get the groceries', 'Pick up the pharmacy order', 'Get home before the heat'],
+    lines: [
+      { who: 'jess', text: 'I am not his babysitter.' },
+      { who: 'marcus', text: 'You are for two hours.' },
+      { who: 'jess', text: 'Two hours is a lot of hours.' },
+      { who: 'elena', text: 'He knows where the freezer is.' },
+    ],
+    log: 'They go together in the Camry. The cooler sits between them on the way back.',
+    teach: 'Put both parents on the cart and choose "help together".',
+    do: { type: 'together', target: 'store' },
+    sets: ['shoppedTogether'],
+  },
+
+  {
+    id: 'p11', day: 0, at: 10 * 60 + 15,
+    objectives: ['Pay for the groceries', 'Put one thing back on the belt', 'Get the car started'],
+    lines: [
+      { who: 'marcus', text: 'It was declined.' },
+      { who: 'elena', text: 'Try it again.' },
+      { who: 'marcus', text: 'It went through.' },
+      { who: 'elena', text: 'Then one thing goes back.' },
+    ],
+    log: 'Elena looks at the screen on the card reader, not at him.',
+    do: {
+      type: 'choice', flag: 'cart',
+      prompt: 'One thing has to go back on the belt. The pharmacy order is forty-five dollars.',
+      options: [
+        {
+          value: 'water', label: 'Put back the case of water',
+          lines: [
+            { who: 'marcus', text: 'The case of water goes back.' },
+            { who: 'elena', text: 'Sure.' },
+          ],
+          log: 'The case of water goes back on the belt. Elena does not say anything else about it.',
+        },
+        {
+          value: 'pharmacy', label: 'Put back the pharmacy pickup',
+          lines: [
+            { who: 'elena', text: 'That is my blood pressure and his inhaler.' },
+            { who: 'marcus', text: 'I know what it is.' },
+          ],
+          log: 'The pharmacy bag goes back on the belt. Marcus keeps looking at it on the cart.',
+        },
+        {
+          value: 'birthday', label: 'Put back Jess\'s birthday things',
+          lines: [
+            { who: 'elena', text: 'She has been talking about that cake since Tuesday.' },
+            { who: 'marcus', text: 'She has.' },
+          ],
+          log: 'The birthday things go back on the belt. The cake is in a white box with a bow on it.',
+        },
+      ],
+    },
+    sets: ['cardDeclined'],
+  },
+
+  {
+    id: 'p12', day: 0, at: 13 * 60,
+    objectives: ['Have something cold to drink', 'Watch Theo in the sprinkler', 'Bring the laundry in'],
+    lines: [
+      { who: 'jess', text: 'It is one hundred and eleven degrees.' },
+      { who: 'theo', text: 'This is the best day of my life.' },
+      { who: 'jess', text: 'It has been the best day of your life since Tuesday.' },
+      { who: 'marcus', text: 'Both of you. Inside in ten minutes.' },
+    ],
+    log: 'Over the wall, the Okafor pool has four people in it and no shade over it.',
+    teach: 'Click the sprinkler to join them. You can let it run without you.',
+    do: { type: 'use', who: 'marcus', target: 'sprinkler' },
+    optional: true,
+    timeout: 30,
+    sets: ['okaforPoolSeen'],
+  },
+
+  {
+    id: 'p13', day: 0, at: 16 * 60,
+    objectives: ['Finish the Hendricks deck', 'Get the laundry off the line', 'Watch the sky'],
+    lines: [
+      { who: 'pruitt', text: 'They said the grid was strained. Said it on the radio.' },
+      { who: 'marcus', text: 'Strained how?' },
+      { who: 'pruitt', text: 'They did not say. It is not raining. That is what I would call strained.' },
+      { who: 'marcus', text: 'It is not going to rain.' },
+    ],
+    log: 'There is a thunderhead sitting over the west end of the valley and it is not moving.',
+    teach: 'There is nothing to do but wait. The sky is worth a look.',
+    do: { type: 'wait', minutes: 45 },
+    sets: ['gridStrained'],
+  },
+
+  {
+    id: 'p13a', day: 0, at: 17 * 60,
+    objectives: ['Fill the tank', 'Get home before dark', 'Start dinner'],
+    lines: [
+      { who: 'theo', text: 'Are we going to the store?' },
+      { who: 'marcus', text: 'No. Just the tank.' },
+      { who: 'theo', text: 'You always say just the tank.' },
+    ],
+    log: 'The gauge is under a quarter of a tank. It is fifty-eight dollars to fill it.',
+    do: {
+      type: 'choice', flag: 'gas',
+      prompt: 'The gauge is low. It is fifty-eight dollars to fill the tank.',
+      options: [
+        {
+          value: 'full', label: 'Fill it up', minutes: 15,
+          lines: [
+            { who: 'theo', text: 'Can I get a juice box?' },
+            { who: 'marcus', text: 'No. Just the tank.' },
+            { who: 'theo', text: 'You always say that.' },
+          ],
+          log: 'Eight gallons in, fifteen minutes at the pump. Theo falls asleep before it finishes.',
+        },
+        {
+          value: 'quarter', label: 'I will do it Saturday', minutes: 3,
+          lines: [
+            { who: 'marcus', text: 'We will do it Saturday.' },
+            { who: 'theo', text: 'Saturday?' },
+            { who: 'marcus', text: 'Saturday.' },
+          ],
+          log: 'The whole way home Theo asks if they are going to the store.',
+        },
+      ],
+    },
+    sets: ['lowGauge'],
+  },
+
+  {
+    id: 'p14', day: 0, at: 19 * 60,
+    objectives: ['Get dinner on the table', 'Pick something to watch', 'Get everybody in their seat'],
+    lines: [
+      { who: 'theo', text: 'I want the one with the dog.' },
+      { who: 'jess', text: 'There is no dog in it.' },
+      { who: 'theo', text: 'There is a dog in every one of them.' },
+      { who: 'elena', text: 'Tell your father what we agreed on.' },
+      { who: 'marcus', text: 'We agreed on the one with the dog.' },
+    ],
+    log: 'Nobody finishes a sentence. Jess watches the two of them over the top of the table and does not say anything.',
+    teach: 'Click the table to sit everybody down.',
+    do: { type: 'use', who: 'marcus', target: 'dinner-table' },
+    sets: ['satDownTogether'],
+  },
+
+  {
+    id: 'p14a', day: 0, at: 22 * 60,
+    objectives: ['Go out into the street', 'Watch the sky', 'Find out what it is'],
+    lines: [
+      { who: 'theo', text: 'Is that the northern lights?' },
+      { who: 'marcus', text: 'Not up here.' },
+      { who: 'okafor', text: 'It is on the news. It is on the news right now!' },
+      { who: 'jess', text: 'Nobody is going to believe us.' },
+    ],
+    log: 'Green over the whole street, and half the neighbours filming it from the middle of the road. Theo rides on Marcus\'s shoulders and Elena stands beside him. For about a minute none of them says anything.',
+    teach: 'You can walk out into the street and watch it.',
+    do: { type: 'walk', who: 'marcus', target: 'street' },
+    optional: true,
+    timeout: 30,
+    sets: ['sawAurora'],
+  },
+
+  {
+    id: 'p15', day: 0, at: 23 * 60 + 30,
+    objectives: ['Go to bed', 'Leave the porch light on', 'Close the blinds'],
+    lines: [
+      { who: 'marcus', text: 'Elena.' },
+      { who: 'elena', text: 'Mm.' },
+      { who: 'marcus', text: 'Nothing. Go to sleep.' },
+    ],
+    log: 'Everybody is asleep. The fan runs in the other room. Outside it is still July and the sky is clear.',
+    teach: 'Nothing left to do tonight.',
+    do: { type: 'wait', minutes: 30 },
+    outage: true,
+    sets: ['lastNormalNight'],
   },
 ];

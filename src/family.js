@@ -137,6 +137,11 @@ export class Member {
   }
 
   stopTask(quiet = false) {
+    if (this.task?.type === 'carAC') {
+      const car = this.game.systems.car;
+      const cell = this.game.map.useCells(car)[0];
+      if (cell) this.pos.set(cell[0] + 0.5, 0, cell[1] + 0.5);
+    }
     if (this.watching) {
       this.watching = false;
       this.game.log(`${this.name} ends the watch.`);
@@ -149,6 +154,7 @@ export class Member {
   }
 
   moveTo(x, y, goal = null) {
+    if (this.task?.type === 'carAC') this.stopTask(true);
     if (!this.canAct()) return false;
     const [cx, cy] = this.cell();
     const p = findPath(this.game.map, cx, cy, x, y);
@@ -241,6 +247,7 @@ export class Member {
 
   // Walk to the closest standing spot among `cells`, then start goal.
   approach(cells, goal, what) {
+    if (this.task?.type === 'carAC') this.stopTask(true);
     if (!this.canAct()) return false;
     const map = this.game.map;
     const [cx, cy] = this.cell();
@@ -286,7 +293,7 @@ export class Member {
     const dur = {
       search: (o?.home ? 4 : o?.car ? 6 : 8) * slow,
       open: 0.3, drinkTap: 3, drinkTub: 2, fillCont: 4, soak: 5, douse: 3, fillTub: Infinity, sleep: Infinity, drag: Infinity,
-      job: g.job?.dur ?? 15, system: g.duration ?? 3,
+      job: g.job?.dur ?? 15, system: g.duration ?? 3, prologue: g.duration ?? 1,
     }[g.type] ?? 1;
     if (g.type === 'fillTub') {
       const other = this.game.family.find((m) => m !== this && m.task?.type === 'fillTub');
@@ -385,7 +392,7 @@ export class Member {
 
   // ---- per frame ----
   update(dtMin, dtReal) {
-    if (this.dead) return;
+    if (this.dead || this.away) return;
     const sim = this.game.sim;
     this.mixer.update(dtReal * Math.min(sim.speed, 2.5) * (this.walkAnimRate || 1));
 
@@ -430,7 +437,7 @@ export class Member {
     }
 
     if (dtMin <= 0) return;
-    if (this.ai) this.think(dtMin);
+    if (this.ai && sim.phase !== 'prologue') this.think(dtMin);
     else if (this.task?.type === 'assist' && this.canAct()) { this.assistT = (this.assistT || 0) - dtMin; if (this.assistT <= 0) { this.assistT = 0.5; this.stayNear(this.task.lead, 1.6); } }
     if (this.task?.type === 'assist' && (!this.task.lead.task && !this.task.lead.goal || this.task.lead.dead)) this.task = null;
     this.updateTask(dtMin);
@@ -483,6 +490,11 @@ export class Member {
       if (t.t >= t.dur) { this.task = null; g.jobDone(this, t.job); }
       return;
     }
+    if (t.type === 'prologue' && t.beatType === 'together' && !['marcus', 'elena'].every((id) => {
+      const other = g.family.find((m) => m.id === id);
+      return other?.canAct() && !other.away && other.pos.distanceTo(this.pos) < 3
+        && (other.task?.target === t.target || g.beats.arrivals.has(id));
+    })) return;
     t.t += dtMin * (['search', 'fillCont'].includes(t.type) ? this.helpRate() : 1) * (t.type === 'search' && g.isDark(this) ? 0.5 : 1);
     if (t.type === 'fillTub') {
       const p = sim.pressure();
@@ -502,6 +514,7 @@ export class Member {
     this.task = null;
     const o = t.obj;
     switch (t.type) {
+      case 'prologue': g.beats.notify(t.beatType, this.id, t.target); break;
       case 'system': g.systems.complete(t.action, this, t.data); break;
       case 'openCan': {
         const i = this.inv.indexOf(t.entry);
@@ -548,6 +561,13 @@ export class Member {
 
   updateBody(dtMin) {
     const g = this.game, sim = g.sim, map = g.map, n = this.needs;
+    if (sim.phase === 'prologue') {
+      this.felt = map.isIndoor(...this.cell()) ? 78 : sim.outdoor();
+      this.bodyT = 98.6; this.deficit = Math.min(0.6, this.deficit); this.syncHydration();
+      n.health = 100;
+      for (const key of ['food', 'energy', 'morale']) n[key] = Math.max(60, n[key] - dtMin / 1200);
+      return;
+    }
     const h = dtMin / 60;
     const [cx, cy] = this.cell();
     const indoor = map.isIndoor(cx, cy);
@@ -689,6 +709,7 @@ export class Member {
     if (t) {
       const o = t.obj ? t.obj.name.toLowerCase() : '';
       return {
+        prologue: t.obj?.name ? `Using the ${t.obj.name.toLowerCase()}` : 'Busy',
         carAC: 'Cooling in the car (burning fuel)',
         system: t.waitingPower ? 'Waiting for daylight power' : { visitWalt: 'Visiting Walt', waterWalt: 'Bringing Walt water', cook: 'Cooking on the yard grill', enterCar: 'Getting into the car', placeFan: 'Setting up the fan', nebulizer: 'Nebulizer treatment', recharge: 'Charging from daylight', radio: 'Cranking the radio' }[t.action] || 'Working',
         openCan: 'Opening a can with a knife',
@@ -699,13 +720,13 @@ export class Member {
         sleep: t.obj ? 'Sleeping' : 'Sleeping on the floor',
         assist: `Helping ${t.lead?.name}`, waitHelp: `Waiting for help to lift ${t.victim?.name}`,
         job: t.waiting ? `${t.job?.label}: waiting for ${t.missing?.map((m) => m.name).join(', ') || 'everyone'}` : t.job?.label,
-      }[t.type] || '';
+      }[t.type] || 'Idle';
     }
     if (this.ai && this.mode?.type === 'follow') return `Following ${this.game.family.find((m) => m.id === this.mode.who)?.name}`;
     if (this.path.length) return this.goal?.type === 'watch' ? 'Going home to keep watch' : this.goal?.type === 'job' && this.goal.job.walkLabel || 'Walking';
     if (this.ai && this.mode?.type === 'stay') return 'Staying put';
     if (this.wetMin > 0) return 'Wet towel on';
-    return '';
+    return 'Idle';
   }
   progress() {
     const t = this.task;

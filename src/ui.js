@@ -67,13 +67,16 @@ export class UI {
     const out = Math.round(sim.outdoor()), ins = Math.round(sim.indoor);
     const p = sim.pressure();
     const water = p > 0.6 ? 'running' : p > 0.05 ? 'sputtering' : 'dead';
-    $('#clock').innerHTML = `<b>Day ${sim.day}</b> · ${sim.clock()}`;
-    $('#env').innerHTML =
+    $('#clock').innerHTML = `<b>${sim.dateLabel()}</b> · ${sim.clock()}`;
+    $('#env').innerHTML = sim.power
+      ? `<span>Outside ${out}°F</span><span>Inside ${ins}°F</span><span>Taps: running</span><span>AC: running</span>`
+      :
       `<span class="${out >= 110 ? 'bad' : out >= 100 ? 'warn' : ''}">Outside ${out}°F${sim.sun() > 0.2 ? ' ☀' : ''}</span>` +
       `<span class="${ins >= 95 ? 'bad' : ins >= 88 ? 'warn' : ''}">Inside ${ins}°F</span>` +
       `<span class="${water === 'dead' ? 'bad' : water === 'sputtering' ? 'warn' : ''}">Taps: ${water}</span>` +
       (() => { const w = g.waterDays(); const d = w.days; const cls = d < 2 ? 'bad' : d < 4 ? 'warn' : '';
         return `<span class="${cls}" title="Tub, carried and discovered home water, at today's indoor rate (${w.perDay.toFixed(1)} L/day for the family)">Water: ${Math.round(w.liters)} L ≈ ${isFinite(d) ? d.toFixed(1) : '∞'} days</span>`; })() +
+      `<span>AC: ${sim.power ? 'running' : 'silent'}</span>` +
       `<span>Car: ${g.systems.car.fuelL.toFixed(1)} L${g.systems.car.running ? ' · AC on' : ''}</span>` +
       `<span>Window shade: ${Math.min(3, g.systems.shades.size)}/3 effective · Solar: ${Math.round(g.systems.watts())} W${g.systems.solar.fan ? ' · fan placed' : ''}</span>`;
     for (const b of document.querySelectorAll('#speed button')) b.classList.toggle('on', Number(b.dataset.s) === sim.speed);
@@ -94,7 +97,7 @@ export class UI {
         <div class="st ${sk}">${st}${m.isWatching() && st !== 'Keeping watch' ? ' · Keeping watch' : ''} · core ${m.bodyT.toFixed(1)}°F <span class="felt">feels ${Math.round(m.felt)}°${m.wetMin > 0 ? ' · wet' : ''}</span></div>
         <div class="equipment">Worn: ${esc(m.worn ? ITEMS[m.worn.id].name : 'nothing')}${g.lights.some((l) => l.owner === m && l.entry.id === 'flashlight') ? ' · holding flashlight' : ''}${g.isDark(m) ? ' · dark: slower work' : ''}</div>
         ${bar(`Water −${m.deficit.toFixed(1)} L`, n.hydration)}${bar('Food', n.food)}${bar('Rest', n.energy)}${bar('Health', n.health)}${bar('Spirit', n.morale)}
-        <div class="do">${esc(m.doing())}${pr !== null ? ` <em>${Math.round(pr * 100)}%</em>` : ''}</div>
+        <div class="do">${esc(m.doing() || 'Idle')}${pr !== null ? ` <em>${Math.round(pr * 100)}%</em>` : ''}</div>
       </div>`;
     }).join(''));
 
@@ -144,6 +147,7 @@ export class UI {
     for (const m of this.g.family) {
       let el = this.tags.get(m);
       if (!el) { el = document.createElement('div'); el.className = 'tag'; host.appendChild(el); this.tags.set(m, el); }
+      el.style.display = m.away ? 'none' : '';
       const v = m.pos.clone();
       v.y += m.asleep || m.dead ? 0.9 : m.def.h + 0.35;
       v.project(camera);

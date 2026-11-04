@@ -5,6 +5,11 @@
 // spoilsH = hours until spoiled at ~100F without refrigeration. Omit = shelf-stable.
 
 export const ITEMS = {
+  inhaler_empty: { name: 'Nearly empty inhaler', cat: 'medical', kg: 0.03, desc: 'Theo’s kitchen inhaler. Almost nothing left.' },
+  inhaler_spare: { name: 'Spare rescue inhaler', cat: 'medical', kg: 0.03, desc: 'The pharmacy pickup for Theo.', use: { health: 8 } },
+  bp_refill: { name: 'Blood pressure refill', cat: 'medical', kg: 0.04, desc: 'Elena’s pharmacy refill.', use: { health: 6 }, tags: ['meds'] },
+  birthday_jess: { name: 'Jess’s birthday things', cat: 'misc', kg: 0.3, desc: 'A small bag from the grocery run.', use: { morale: 12 } },
+  fridge_list: { name: 'Grocery list', cat: 'misc', kg: 0.01, desc: 'Half the list is crossed out. Pasta again.' },
   deep_cycle_battery: { name: 'RV deep-cycle battery', cat: 'material', kg: 22, desc: "Pruitt's spare RV battery. For a small solar circuit." },
   charge_controller: { name: 'Solar charge controller', cat: 'material', kg: 0.8, desc: "Walt's spare controller. Needs his wiring instructions." },
   box_fan: { name: 'Box fan', cat: 'tool', kg: 3, desc: 'Moves air in one room on the small solar circuit. 60 watts.' },

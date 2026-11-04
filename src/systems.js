@@ -74,11 +74,14 @@ export class SurvivalSystems {
     if (o.home && ['S', 'f'].includes(o.ch)) {
       for (let i = found.length - 1; i >= 0; i--) if (['water_gallon', 'water_gallon_half'].includes(found[i].id)) found.splice(i, 1);
     }
+    if (o.home && (g.decisions.cart ?? DEFAULT_DECISIONS.cart) === 'water') {
+      for (let i = found.length - 1; i >= 0; i--) if (found[i].id === 'water_case') found.splice(i, 1);
+    }
     if (o.questStock) return;
     o.questStock = true;
     const add = (id, n = 1) => { for (let k = 0; k < n; k++) addEntry(found, makeEntry(id)); };
     if (o.home && o.ch === 'S' && o.x === 35) {
-      if (g.decisions.jugs === 'shelf') { add('water_gallon', 10); add('water_gallon_half', 4); }
+      if ((g.decisions.jugs ?? DEFAULT_DECISIONS.jugs) === 'shelf') { add('water_gallon', 10); add('water_gallon_half', 4); }
       add('tarp'); add('rope'); add('box_fan'); add('radio_handcrank'); found.push({ id: 'aa_rechargeable', n: 1, chargeMin: 0 });
     }
     if (o.home && o.ch === 'k' && o.x === 28) add('aluminum_foil', 3);
@@ -110,7 +113,7 @@ export class SurvivalSystems {
   job(m, site, label, duration, action, crew = [m]) {
     if (!m?.canAct() || !site || this.busy(site)) return false;
     const job = { site: site.key, crew, steps: [{ label, dur: duration,
-      cells: () => this.g.map.useCells(site), what: site.name,
+      cells: () => this.g.map.useCells(site).filter(([x, y]) => site.kind !== 'window' || (this.g.map.isIndoor(x, y) && !this.g.map.isGarage(x, y))), what: site.name,
       done: (lead) => this.complete(action, lead, { site }) }] };
     return this.g.startJob(m, job) !== false;
   }
@@ -238,6 +241,7 @@ export class SurvivalSystems {
         if (g.map.isGarage(car.x, car.y) && !car.garageOpen) return this.fail('Do not idle in a closed garage. Carbon monoxide can kill. Open the garage door first.');
         if (this.occupants().length >= 2) return this.fail('Only two people can cool down in the car at once.');
         if (car.fuelL <= 0) return this.fail('The tank is empty. The pumps have no power.');
+        m.pos.set(car.x + 1.5 + this.occupants().length, 0.45, car.y + 1);
         m.task = { type: 'carAC', t: 0, dur: Infinity };
         if (m.ai) m.mode = { type: 'stay' };
         car.running = true; this.line('marcus.car.ac'); this.line('elena.car.fuel');
@@ -321,6 +325,8 @@ export class SurvivalSystems {
     this.line(g.rng.next() < 0.5 ? 'walt.memory' : 'walt.daughter');
     if (g.family.some((p) => p.id === 'jess' && this.near(p, this.site('walt'), 6))) this.line('jess.walt');
     w.instruction = { right: lucid, day: g.sim.day };
+    const objective = g.objectives?.find((o) => o.id === 'solar');
+    if (objective) objective.text = 'Find Pruitt’s RV battery and build a small circuit';
     if (!w.controllerGiven) {
       if (m.kg() + ITEMS.charge_controller.kg > m.cap) return this.fail('Make room to carry Walt’s charge controller, then visit again.');
       addEntry(m.inv, makeEntry('charge_controller')); w.controllerGiven = true;
