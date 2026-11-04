@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { findPath, nearbyWalkable } from './path.js';
-import { makeEntry, invKg } from './inventory.js';
+import { makeEntry, invKg, entryKg, ITEMS } from './inventory.js';
 
 // walk: meters per real second at 1x. Space is compressed: crossing the block costs game minutes.
 // deficit: liters of body water already lost at the start (a hot night with the AC off at the end).
@@ -35,6 +35,7 @@ export class Member {
     this.deficit = def.deficit; // liters of body water lost
     this.bodyT = 98.6;
     this.felt = 80;
+    this.worn = null;
     this.wetMin = 0;            // minutes of extra evaporative cooling from a soaked shirt/towel
     this.collapsed = false;
     this.draggedBy = null;
@@ -89,7 +90,11 @@ export class Member {
 
   get pos() { return this.obj.position; }
   cell() { return [Math.floor(this.pos.x), Math.floor(this.pos.z)]; }
-  kg() { return invKg(this.inv); }
+  equipmentKg() {
+    const held = (this.game.lights || []).filter((l) => l.owner === this && l.entry !== this.worn);
+    return (this.worn ? entryKg(this.worn) : 0) + held.reduce((s, l) => s + entryKg(l.entry), 0);
+  }
+  kg() { return invKg(this.inv) + this.equipmentKg(); }
   get pct() { return (this.deficit / this.mass) * 100; } // % body mass lost as water
   canAct() { return !this.dead && !this.collapsed && !this.draggedBy; }
   syncHydration() { this.needs.hydration = clamp(100 - (this.pct / 8) * 100); }
@@ -393,7 +398,7 @@ export class Member {
       const sick = this.bodyT >= EXHAUSTION_F ? 0.7 : 1;
       const dragging = this.task?.type === 'drag' ? (this.helpers(2.6).length ? 0.85 : 0.45) : 1;
       const hauling = this.game.carry?.lead === this ? 0.7 : 1;
-      let dist = this.walk * sick * dragging * hauling * dtReal * sim.speed;
+      let dist = this.walk * sick * dragging * hauling * (this.game.isDark(this) ? 0.8 : 1) * dtReal * sim.speed;
       while (dist > 0 && this.path.length) {
         const [nx, ny] = this.path[0];
         const tx = nx + 0.5, tz = ny + 0.5;
@@ -476,7 +481,7 @@ export class Member {
       if (t.t >= t.dur) { this.task = null; g.jobDone(this, t.job); }
       return;
     }
-    t.t += dtMin * (['search', 'fillCont'].includes(t.type) ? this.helpRate() : 1);
+    t.t += dtMin * (['search', 'fillCont'].includes(t.type) ? this.helpRate() : 1) * (t.type === 'search' && g.isDark(this) ? 0.5 : 1);
     if (t.type === 'fillTub') {
       const p = sim.pressure();
       if (p <= 0.001) {
@@ -495,6 +500,11 @@ export class Member {
     this.task = null;
     const o = t.obj;
     switch (t.type) {
+      case 'openCan': {
+        const i = this.inv.indexOf(t.entry);
+        if (i >= 0) g.useItem(this, i, t.target, true);
+        break;
+      }
       case 'search': g.searchDone(this, o); break;
       case 'open': g.openContainer(this, o); break;
       case 'drinkTap':
@@ -514,9 +524,10 @@ export class Member {
         const l = Math.min(2, sim.tubL);
         if (l < 0.5) { g.log('Not enough water left to waste on a towel.', 'warn'); break; }
         sim.tubL -= l;
-        this.wetMin = 60;
+        const cloth = ITEMS[this.worn?.id]?.wear;
+        this.wetMin = cloth?.wetMinutes || 60;
         this.bodyT = Math.max(98.6, this.bodyT - 0.5);
-        g.log(`${this.name} soaks a towel and a shirt in the tub (${l.toFixed(0)} L). It helps.`);
+        g.log(`${this.name} soaks ${cloth?.wetMinutes ? 'the ' + ITEMS[this.worn.id].name.toLowerCase() : 'a shirt'} in the tub (${l.toFixed(0)} L). Cooling for ${this.wetMin} minutes.`);
         break;
       }
       case 'fetch': {
@@ -538,7 +549,8 @@ export class Member {
     const [cx, cy] = this.cell();
     const indoor = map.isIndoor(cx, cy);
     this.indoor = indoor;
-    this.felt = indoor ? sim.indoor + (map.isGarage(cx, cy) ? 5 : 0) - (this.bed?.together ? 2 : 0) : sim.outdoor() + 14 * sim.sun();
+    const sunReduction = ITEMS[this.worn?.id]?.wear?.sunReduction || 0;
+    this.felt = indoor ? sim.indoor + g.candleHeat(this) + (map.isGarage(cx, cy) ? 5 : 0) - (this.bed?.together ? 2 : 0) : sim.outdoor() + 14 * sim.sun() * (1 - sunReduction);
     const working = this.task && !this.asleep;
     const act = this.collapsed || this.draggedBy ? 0.8 : this.asleep ? 0.6
       : this.path.length ? (this.task?.type === 'drag' ? 2.2 : 1.4) : working ? 1.2 : 1;
@@ -671,6 +683,7 @@ export class Member {
     if (t) {
       const o = t.obj ? t.obj.name.toLowerCase() : '';
       return {
+        openCan: 'Opening a can with a knife',
         search: `Searching the ${o}`, open: `Opening the ${o}`, drinkTap: 'Drinking from the tap',
         drinkTub: 'Drinking from the tub', fillCont: 'Filling containers', fillTub: 'Filling the tub',
         soak: 'Soaking a towel', douse: `Pouring water over ${t.victim?.name}`, drag: `Dragging ${t.victim?.name}`,

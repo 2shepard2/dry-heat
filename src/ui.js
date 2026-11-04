@@ -90,6 +90,7 @@ export class UI {
       return `<div class="card ${sel ? 'sel' : ''} ${m.dead ? 'deadc' : ''}" data-id="${m.id}">
         <div class="nm">${sel ? '<span class="sel-mark">▶ </span>' : ''}<b>${m.name}</b> <span>${m.role}, ${m.age} · ${m.mass} kg</span></div>
         <div class="st ${sk}">${st}${m.isWatching() && st !== 'Keeping watch' ? ' · Keeping watch' : ''} · core ${m.bodyT.toFixed(1)}°F <span class="felt">feels ${Math.round(m.felt)}°${m.wetMin > 0 ? ' · wet' : ''}</span></div>
+        <div class="equipment">Worn: ${esc(m.worn ? ITEMS[m.worn.id].name : 'nothing')}${g.lights.some((l) => l.owner === m && l.entry.id === 'flashlight') ? ' · holding flashlight' : ''}${g.isDark(m) ? ' · dark: slower work' : ''}</div>
         ${bar(`Water −${m.deficit.toFixed(1)} L`, n.hydration)}${bar('Food', n.food)}${bar('Rest', n.energy)}${bar('Health', n.health)}${bar('Spirit', n.morale)}
         <div class="do">${esc(m.doing())}${pr !== null ? ` <em>${Math.round(pr * 100)}%</em>` : ''}</div>
       </div>`;
@@ -105,8 +106,10 @@ export class UI {
     if (!m) { set(inv, '<div class="hint">Click a family member to see what they carry.</div>'); set(cont, ''); return; }
     const kg = m.kg();
     set(inv, `<h3>${m.name} carries <span class="${kg > m.cap * 0.9 ? 'warn' : ''}">${kg.toFixed(1)} / ${m.cap} kg</span></h3>` +
+      '<button class="equipment-control">Worn items / nearby lights</button>' +
       (m.inv.length ? m.inv.map((e, i) => this.itemRow(e, i, 'inv')).join('') : '<div class="hint">Nothing.</div>'));
     inv.onpointerdown = (ev) => {
+      if (ev.target.closest('.equipment-control')) { g.equipmentMenu(m, ev.clientX, ev.clientY); return; }
       const r = ev.target.closest('.item');
       if (r) g.itemMenu(m, Number(r.dataset.i), ev.clientX, ev.clientY);
     };

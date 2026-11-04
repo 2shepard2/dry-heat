@@ -29,8 +29,8 @@ export const entryKg = (e) => (isLiquid(e) ? EMPTY_KG[e.id] + e.left : ITEMS[e.i
 export const invKg = (inv) => inv.reduce((s, e) => s + entryKg(e), 0);
 
 export function addEntry(inv, e) {
-  if (!isLiquid(e)) {
-    const same = inv.find((x) => x.id === e.id && !isLiquid(x));
+  if (!isLiquid(e) && e.chargeMin === undefined) {
+    const same = inv.find((x) => x.id === e.id && !isLiquid(x) && x.chargeMin === undefined);
     if (same) { same.n += e.n; return; }
   }
   inv.push(e);
@@ -48,6 +48,7 @@ export function label(e, sim) {
   let s = it.name;
   if (isLiquid(e)) s += ` (${e.left.toFixed(1)} of ${capOf(e.id).toFixed(1)} L)`;
   else if (e.n > 1) s += ` ×${e.n}`;
+  if (e.chargeMin !== undefined) s += ` (${Math.ceil(e.chargeMin)} min charge)`;
   if (isSpoiled(e, sim)) s += ' (spoiled)';
   return s;
 }
@@ -71,3 +72,29 @@ export function rollLoot(obj, rng, lotId) {
 }
 
 export { ITEMS };
+
+// Stateful devices must remain individual entries when stored or handed over.
+export function takeOne(inv, e) {
+  const i = inv.indexOf(e);
+  if (i < 0 || e.n <= 0) return null;
+  if (e.n === 1) return inv.splice(i, 1)[0];
+  e.n--;
+  return { ...e, n: 1 };
+}
+
+export function openerIn(inventories) {
+  const ids = inventories.flat().filter((e) => e.n > 0).map((e) => e.id);
+  return ['can_opener', 'multitool', 'pocket_knife', 'kitchen_knife'].find((id) => ids.includes(id));
+}
+
+export function itemHint(id) {
+  const it = ITEMS[id];
+  if (['can_opener', 'multitool'].includes(id)) return 'Opens sealed cans while in the household';
+  if (['pocket_knife', 'kitchen_knife'].includes(id)) return 'Opens sealed cans slowly (5 minutes)';
+  if (['lighter', 'matches'].includes(id)) return 'Light a candle from its menu';
+  if (id === 'aa_batteries') return 'Load a flashlight, headlamp or lantern from its menu';
+  if (it.cat === 'material') return 'Building material: later';
+  if (it.cat === 'fuel' || it.tags?.includes('fuel')) return 'Fuel: later';
+  if (it.cat === 'tool') return 'Tool: later';
+  return 'No direct use yet';
+}

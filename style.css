@@ -92,3 +92,6 @@ button:disabled { opacity: 0.45; cursor: default; }
 .box .fine { margin-top: 14px; font-size: 11px; color: var(--dim); }
 #loading { position: fixed; left: 12px; bottom: 12px; color: var(--dim); z-index: 31; }
 #over h1 { letter-spacing: 0.05em; }
+
+.equipment { color: var(--dim); font-size: 11px; margin: 3px 0; }
+.equipment-control { width: 100%; margin: 3px 0 7px; text-align: left; font-size: 12px; }

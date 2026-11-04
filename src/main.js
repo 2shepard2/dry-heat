@@ -1,7 +1,7 @@
 // Dry Heat, grey box. Boot, render, input, and the game-level rules that tie map, sim and family together.
 import * as THREE from 'three';
 import { makeFigure } from './figure.js';
-import { buildMap } from './map.js';
+import { buildMap, T } from './map.js';
 import { buildWorld } from './build.js';
 import { Sim } from './sim.js';
 import { NightEvents } from './events.js';
@@ -10,7 +10,7 @@ import { nearbyWalkable } from './path.js';
 import { UI } from './ui.js';
 import { makeRng } from './rng.js';
 import {
-  ITEMS, PER_L, capOf, entryKg, invKg, isLiquid, refillable, addEntry, isSpoiled, rollLoot, label,
+  ITEMS, PER_L, capOf, entryKg, invKg, isLiquid, refillable, addEntry, isSpoiled, rollLoot, label, takeOne, openerIn, itemHint,
 } from './inventory.js';
 
 const $ = (s) => document.querySelector(s);
@@ -71,18 +71,30 @@ function updateLight() {
   sun.visible = s > 0.001;
   const low = 1 - Math.min(1, s * 2.2);
   sun.color.setHex(0xfff4e2).lerp(C(0xff9a50), low);
-  hemi.intensity = 0.2 + 1.05 * Math.min(1, s * 2.2);
+  hemi.intensity = 0.035 + 1.05 * Math.min(1, s * 2.2);
   hemi.color.setHex(0x2a3858).lerp(C(0xdde6ee), Math.min(1, s * 1.5));
-  moon.intensity = 0.45 * (1 - Math.min(1, s * 4));
+  moon.intensity = 0.065 * (1 - Math.min(1, s * 4));
   const bg = SKY.night.clone();
   if (s > 0) bg.copy(SKY.dawn).lerp(SKY.day, Math.min(1, s * 2.5)).lerp(SKY.haze, Math.max(0, s - 0.6));
   scene.background = bg;
 }
 
+// Allocate once, without shadows. Keeping four lights in the scene avoids
+// rebuilding all world materials when equipment is switched on and off.
+const lightPool = Array.from({ length: 4 }, () => {
+  const l = new THREE.PointLight(0xffffff, 0, 7, 2);
+  const emitter = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffdf9b }));
+  emitter.visible = false;
+  l.add(emitter);
+  l.userData.emitter = emitter;
+  scene.add(l);
+  return l;
+});
+
 // ---------------------------------------------------------------- game object
 const rng = makeRng(Date.now() >>> 0);
 const game = {
-  scene, map, sim, ITEMS, family: [], selected: [], opens: new Map(), over: false, frames: 0,
+  scene, map, sim, ITEMS, lightPool, family: [], selected: [], opens: new Map(), over: false, frames: 0,
   objectives: [
     { id: 'tub', text: 'Fill the bathtub while the taps still run' },
     { id: 'look', text: 'Search the house for supplies' },
@@ -100,15 +112,160 @@ const game = {
   },
   focusOn(m) { if (m) cam.target.set(m.pos.x, 0, m.pos.z); },
 
-  searchDone(m, o) {
-    if (!o.searched) {
-      o.searched = true;
-      o.items = rollLoot(o, rng, map.lots[o.lot]?.id);
-      game.log(o.items.length
-        ? `${m.name} goes through the ${o.name.toLowerCase()}: ${o.items.length} kind${o.items.length > 1 ? 's' : ''} of thing.`
-        : `${m.name} goes through the ${o.name.toLowerCase()}. Nothing worth taking.`);
-      if (o.home) game.objective('look');
+  // Light records own their item until it is switched off or picked up. Four
+  // reusable, shadow-free GPU lights keep shader cost bounded on laptops.
+  lights: [],
+  lightPosition(l) { return l.owner ? l.owner.pos : l.pos; },
+  lightReaches(l, x, y) {
+    const p = game.lightPosition(l), d = Math.hypot(p.x - x, p.z - y);
+    if (l.left <= 0 || d > ITEMS[l.entry.id].light.radius) return false;
+    // Walls block gameplay illumination; furniture and open doorways do not.
+    const steps = Math.max(1, Math.ceil(d * 4));
+    for (let k = 1; k < steps; k++) {
+      const t = map.get(Math.floor(p.x + (x - p.x) * k / steps), Math.floor(p.z + (y - p.z) * k / steps));
+      if (t === T.WALL || t === T.BLOCK) return false;
     }
+    return true;
+  },
+  isDark(m) {
+    return sim.sun() < 0.08 && map.isIndoor(...m.cell())
+      && !game.lights.some((l) => game.lightReaches(l, m.pos.x, m.pos.z));
+  },
+  candleHeat(m) {
+    if (!map.isIndoor(...m.cell())) return 0;
+    return game.lights.reduce((sum, l) => sum + (game.lightReaches(l, m.pos.x, m.pos.z) ? (ITEMS[l.entry.id].light.heat || 0) : 0), 0);
+  },
+  householdInventories() {
+    return [...game.family.filter((m) => !m.dead).map((m) => m.inv),
+      ...map.objects.filter((o) => o.home && o.searched).map((o) => o.items)];
+  },
+  // Batteries/ignition must be carried by this person; cans can use the shared
+  // household tools, including discovered tools still in home containers.
+  lightItem(m, i) {
+    const e = m.inv[i], spec = ITEMS[e?.id]?.light;
+    if (!spec || !m.canAct()) return false;
+    if (game.lights.length >= 4) { game.log('Four lights are already on. Put one out first.', 'warn'); return false; }
+    if (!spec.placed && game.lights.some((l) => l.owner === m)) {
+      game.log(`${m.name} already has a light on. Switch it off first.`, 'warn'); return false;
+    }
+    if (e.id === 'headlamp' && m.worn) {
+      game.log(`${m.name} needs to take off the ${ITEMS[m.worn.id].name.toLowerCase()} first.`, 'warn'); return false;
+    }
+    let left = e.chargeMin || 0;
+    if (e.id === 'candle') {
+      if (!m.inv.some((x) => ['lighter', 'matches'].includes(x.id) && x.n > 0)) {
+        game.log(`${m.name} needs a lighter or matches to light the candle.`, 'warn'); return false;
+      }
+      left = e.chargeMin ?? spec.minutes;
+    } else if (left <= 0) {
+      const battery = m.inv.find((x) => x.id === 'aa_batteries' && x.n > 0);
+      if (!battery) { game.log(`${m.name} needs a pack of AA batteries.`, 'warn'); return false; }
+      takeOne(m.inv, battery);
+      left = spec.minutes;
+    }
+    const entry = takeOne(m.inv, e);
+    const l = { entry, left, owner: spec.placed ? null : m, pos: m.pos.clone() };
+    game.lights.push(l);
+    if (e.id === 'headlamp') m.worn = entry;
+    game.log(e.id === 'candle' ? `${m.name} lights a candle and sets it down. A little light, a little more heat.`
+      : spec.placed ? `${m.name} switches on the lantern and sets it down.`
+      : e.id === 'headlamp' ? `${m.name} puts on the headlamp. Both hands free.` : `${m.name} holds the flashlight on.`);
+    game.updateLights(0);
+    return true;
+  },
+  // Explicit hooks for smoke tests, with the same requirements as the menu.
+  placeLight(m, i) { return game.lightItem(m, i); },
+  stopLight(m, l) {
+    if (!game.lights.includes(l) || !m.canAct()) return false;
+    if (l.owner ? l.owner !== m : m.pos.distanceTo(l.pos) > 2.6) return false;
+    const extra = l.owner ? 0 : ITEMS[l.entry.id].kg;
+    if (m.kg() + extra > m.cap) { game.log(`${m.name} can't carry the light. Too heavy.`, 'warn'); return false; }
+    l.entry.chargeMin = Math.max(0, l.left);
+    if (m.worn === l.entry) m.worn = null;
+    game.lights.splice(game.lights.indexOf(l), 1);
+    addEntry(m.inv, l.entry);
+    game.log(`${m.name} ${l.entry.id === 'candle' ? 'blows out' : 'switches off'} the ${ITEMS[l.entry.id].name.toLowerCase()} and packs it away.`);
+    game.updateLights(0);
+    return true;
+  },
+  updateLights(dtMin) {
+    for (const l of [...game.lights]) {
+      l.left = Math.max(0, l.left - dtMin);
+      if (l.left > 0) continue;
+      game.lights.splice(game.lights.indexOf(l), 1);
+      if (l.owner?.worn === l.entry) l.owner.worn = null;
+      if (l.entry.id === 'candle') game.log('A candle burns down. The room is darker.');
+      else {
+        l.entry.chargeMin = 0;
+        // A flat placed lantern remains on the floor until someone retrieves it.
+        if (l.owner) addEntry(l.owner.inv, l.entry);
+        else game.spentLights.push(l);
+        game.log(`The ${ITEMS[l.entry.id].name.toLowerCase()} goes dark. The batteries are spent.`);
+      }
+    }
+    game.lightPool.forEach((point, i) => {
+      const l = game.lights[i];
+      point.userData.emitter.visible = !!l;
+      if (!l) { point.intensity = 0; return; }
+      const spec = ITEMS[l.entry.id].light, p = game.lightPosition(l);
+      point.position.set(p.x, p.y + (l.owner ? l.owner.def.h * (l.entry.id === 'headlamp' ? 0.87 : 0.65) : 0.35), p.z);
+      point.color.setHex(spec.color);
+      point.distance = spec.radius;
+      point.intensity = spec.intensity;
+    });
+  },
+  spentLights: [],
+  pickupLight(m, l) {
+    if (!m.canAct() || !game.spentLights.includes(l) || m.pos.distanceTo(l.pos) > 2.6 || m.kg() + ITEMS[l.entry.id].kg > m.cap) return false;
+    game.spentLights.splice(game.spentLights.indexOf(l), 1);
+    addEntry(m.inv, l.entry);
+    game.log(`${m.name} picks up the flat lantern.`);
+    return true;
+  },
+  wearItem(owner, i, target = owner) {
+    const e = owner.inv[i], it = ITEMS[e?.id];
+    if (!it?.wear || !owner.canAct() || !target.canAct() || !game.near(owner, target)) return false;
+    if (it.light) return owner === target && game.lightItem(owner, i);
+    if (target !== owner && target.kg() + it.kg > target.cap) return false;
+    if (target.worn && !game.unwearItem(target)) return false;
+    target.worn = takeOne(owner.inv, e);
+    game.log(`${target.name} puts on the ${it.name.toLowerCase()}.`);
+    return true;
+  },
+  unwearItem(m) {
+    if (!m.worn || !m.canAct()) return false;
+    const l = game.lights.find((x) => x.entry === m.worn);
+    if (l) return game.stopLight(m, l);
+    const e = m.worn;
+    m.worn = null;
+    addEntry(m.inv, e);
+    game.log(`${m.name} takes off the ${ITEMS[e.id].name.toLowerCase()}.`);
+    return true;
+  },
+  equipmentMenu(m, x, y) {
+    const items = [];
+    if (m.worn) items.push({ label: `Take off ${ITEMS[m.worn.id].name.toLowerCase()}`, fn: () => game.unwearItem(m) });
+    for (const l of game.lights.filter((l) => l.owner === m || !l.owner && m.pos.distanceTo(l.pos) <= 2.6)) {
+      items.push({ label: `Put out / pack ${ITEMS[l.entry.id].name.toLowerCase()}`, hint: `${Math.ceil(l.left)} minutes left`, fn: () => game.stopLight(m, l) });
+    }
+    for (const l of game.spentLights.filter((l) => m.pos.distanceTo(l.pos) <= 2.6)) items.push({ label: 'Pick up flat lantern', fn: () => game.pickupLight(m, l) });
+    if (!items.length) items.push({ label: 'No equipment or nearby lights', disabled: true });
+    ui.menu(x, y, items, `${m.name}: equipment`);
+  },
+
+  searchDone(m, o) {
+    if (!o.lootRolled) {
+      o.lootRolled = true;
+      o.unseen = rollLoot(o, rng, map.lots[o.lot]?.id);
+    }
+    const dark = game.isDark(m), found = [], missed = [];
+    for (const e of o.unseen || []) (dark && rng.chance(0.30) ? missed : found).push(e);
+    for (const e of found) addEntry(o.items, e);
+    o.unseen = missed;
+    o.searched = true;
+    game.log(`${m.name} goes through the ${o.name.toLowerCase()}: ${found.length ? `${found.length} kinds of thing` : 'nothing else worth taking'}.`);
+    if (dark) game.log('Hard to see. Something may have been missed. Search again with a light.');
+    if (o.home) game.objective('look');
     game.openContainer(m, o);
   },
   openContainer(m, o) { game.opens.set(m, o); },
@@ -133,7 +290,12 @@ const game = {
     const it = ITEMS[e.id];
     const items = [];
     const others = game.family.filter((o) => o !== m && !o.dead);
+    if (it.light) items.push({ label: it.light.placed ? 'Light and place here' : e.id === 'headlamp' ? 'Wear and switch on' : 'Hold and switch on',
+      hint: e.id === 'candle' ? 'needs lighter or matches · adds heat' : 'needs AA batteries when flat', disabled: !m.canAct(), fn: () => game.lightItem(m, m.inv.indexOf(e)) });
+    if (it.wear && !it.light) for (const target of [m, ...others]) items.push({ label: `Wear (${target.name})`,
+      hint: it.wear.wetMinutes ? `soak at the tub: ${it.wear.wetMinutes} minutes cooling` : target.worn ? 'replaces worn item' : 'one worn slot', disabled: !m.canAct() || !target.canAct() || !game.near(m, target), fn: () => game.wearItem(m, m.inv.indexOf(e), target) });
     const consumable = it.use || PER_L[e.id];
+    if (!consumable && !it.light && !it.wear) items.push({ label: itemHint(e.id), disabled: true });
     if (consumable) {
       const verb = isLiquid(e) ? 'Drink 1 L' : it.cat === 'water' ? 'Drink' : it.cat === 'food' ? 'Eat' : 'Use';
       const empty = isLiquid(e) && e.left < 0.05;
@@ -162,16 +324,25 @@ const game = {
     ui.menu(x, y, items, label(e, sim));
   },
 
-  useItem(owner, i, target) {
+  useItem(owner, i, target, opened = false) {
     const e = owner.inv[i];
     if (!e || target.dead || !owner.canAct()) return;
     if (!game.near(owner, target)) { game.log(`${target.name} is too far away now.`, 'warn'); return; }
     const it = ITEMS[e.id];
+    if (it.light) return owner === target && game.lightItem(owner, i);
+    if (it.wear) return game.wearItem(owner, i, target);
+    if (!it.use && !PER_L[e.id]) { game.log(itemHint(e.id)); return; }
     const tags = it.tags || [];
-    const hasTool = (ids) => [owner, target].some((p) => p.inv.some((x) => ids.includes(x.id)));
     if (tags.includes('needsCooking')) { game.log(`${it.name} needs cooking. No power, no stove. You'd need propane or charcoal and a grill.`, 'warn'); return; }
-    if (tags.includes('needsOpener') && !hasTool(['can_opener', 'multitool', 'pocket_knife', 'kitchen_knife'])) {
-      game.log(`${owner.name} can't get the can open. Need a can opener, or at least a knife.`, 'warn'); return;
+    if (tags.includes('needsOpener') && !opened) {
+      const opener = openerIn(game.householdInventories());
+      if (!opener) { game.log(`${owner.name} can't get the can open. Need a can opener, multitool or knife in the household.`, 'warn'); return; }
+      if (['pocket_knife', 'kitchen_knife'].includes(opener)) {
+        owner.stopTask(true);
+        owner.task = { type: 'openCan', t: 0, dur: 5, entry: e, target };
+        game.log(`${owner.name} works the knife around the lid. This takes a while.`);
+        return;
+      }
     }
     const n = target.needs;
     // hydration values in the data are "points per 35"; the body works in liters
@@ -213,7 +384,8 @@ const game = {
     const e = fromInv[i];
     if (!e) return false;
     const unit = isLiquid(e) ? entryKg(e) : ITEMS[e.id].kg;
-    const room = capKg === Infinity ? Infinity : capKg - invKg(toInv);
+    const wearer = game.family.find((m) => m.inv === toInv);
+    const room = capKg === Infinity ? Infinity : capKg - invKg(toInv) - (wearer?.equipmentKg() || 0);
     if (isLiquid(e) || e.n === 1 || !all) {
       if (unit > room + 1e-6) { game.log(`${who} can't carry that. Too heavy.`, 'warn'); return false; }
       if (isLiquid(e) || e.n === 1) { fromInv.splice(i, 1); addEntry(toInv, e); }
@@ -442,6 +614,7 @@ function objectMenu(o, cx, cy) {
   const items = [];
   const who = group.length > 1 ? `${lead.name}` : lead.name;
   if (o.kind === 'container') {
+    if (o.unseen?.length) items.push({ label: `Search again (${who})`, hint: 'look for what was missed', fn: () => lead.useObject(o, 'search') });
     items.push(o.searched
       ? { label: `Open (${who})`, fn: () => lead.useObject(o, 'open') }
       : { label: `Search (${who})`, hint: o.home ? '' : 'someone else\'s things', fn: () => lead.useObject(o, 'search') });
@@ -473,6 +646,7 @@ function memberMenu(v, cx, cy) {
   const helpers = game.selected.filter((m) => m !== v && m.canAct());
   const items = v.ai ? [] : [{ label: `Select ${v.name}`, disabled: v.dead, fn: () => select(v, false) }];
   const boss = helpers[0];
+  if (v.canAct()) items.push({ label: 'Worn items and lights', fn: () => game.equipmentMenu(v, cx, cy) });
   if (!v.ai) items.push({ label: 'Keep watch', hint: 'at home · costs rest · H',
     disabled: !v.canAct() || v.watching || v.goal?.type === 'watch', fn: () => v.keepWatch() });
   if (v.flags.wandered) for (const h of helpers.filter((m) => !m.ai)) {
@@ -609,6 +783,7 @@ function frame(now) {
     const steps = Math.max(1, Math.ceil(dtMin / 2));
     for (let s = 0; s < steps; s++) {
       sim.step(dtMin / steps);
+      game.updateLights(dtMin / steps);
       for (const m of game.family) m.update(dtMin / steps, dtReal / steps);
       if (dtMin > 0) game.nightEvents.update();
     }
@@ -659,6 +834,7 @@ function frame(now) {
     if (d > 1.9 || !m.canAct()) game.opens.delete(m);
   }
 
+  game.updateLights(0);
   updateLight();
   renderer.render(scene, camera);
   if (started) {

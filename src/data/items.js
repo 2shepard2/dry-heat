@@ -1,5 +1,7 @@
 // Dry Heat item and loot data. Plain data, no imports.
 // Stats are 0-100 (100 = fine). `use` holds deltas applied to the person using the item.
+// light: minutes per candle/battery pack, radius in meters, heat in local felt °F.
+// wear: one slot per person; sunReduction removes that fraction of the 14°F sun load.
 // spoilsH = hours until spoiled at ~100F without refrigeration. Omit = shelf-stable.
 
 export const ITEMS = {
@@ -104,7 +106,7 @@ export const ITEMS = {
   garden_hose: { name: 'Garden hose', cat: 'tool', kg: 4.5, desc: 'Fifty feet, kinked. Siphons, and links to a rain barrel.', tags: ['container'] },
   rope: { name: 'Coil of rope', cat: 'tool', kg: 1.2, desc: 'Fifty feet of nylon rope.' },
   screwdriver_set: { name: 'Screwdriver set', cat: 'tool', kg: 0.6, desc: 'Flathead and Phillips in a plastic case.' },
-  work_gloves_leather: { name: 'Leather work gloves', cat: 'clothing', kg: 0.2, desc: 'Stiff, stained, still protective.' },
+  work_gloves_leather: { name: 'Leather work gloves', cat: 'clothing', kg: 0.2, desc: 'Stiff, stained, still protective.', wear: {} },
   siphon_pump: { name: 'Siphon hose', cat: 'tool', kg: 0.3, desc: 'Clear tubing with a squeeze bulb. For fuel or a water heater.' },
   bucket_5gal: { name: 'Five-gallon bucket', cat: 'tool', kg: 0.9, liters: 18.9, desc: 'White orange-store bucket. Hauls water, doubles as a toilet.', tags: ['container'] },
   cooler: { name: 'Plastic cooler', cat: 'tool', kg: 2.5, desc: 'Keeps a little cold, for a few hours with ice.', tags: ['container'] },
@@ -118,7 +120,7 @@ export const ITEMS = {
   nails_box: { name: 'Box of nails', cat: 'material', kg: 0.9, desc: 'Common nails, one pound.', tags: ['sharp'] },
   screws_box: { name: 'Box of deck screws', cat: 'material', kg: 0.9, desc: 'Coated, three-inch.' },
   bed_sheet: { name: 'Bed sheet', cat: 'material', kg: 0.5, desc: 'Cotton. Wet it and hang it in a window for cooling.' },
-  towel: { name: 'Bath towel', cat: 'material', kg: 0.6, desc: 'Soak and wrap it around your neck. Evaporation is the only air conditioning left.' },
+  towel: { name: 'Bath towel', cat: 'material', kg: 0.6, desc: 'Soak and wrap it around your neck. Evaporation is the only air conditioning left.', wear: { wetMinutes: 120 } },
   cardboard_box: { name: 'Flattened cardboard', cat: 'material', kg: 0.8, desc: 'Insulation, or kindling.' },
 
   // ---- fuel and light ----
@@ -129,22 +131,22 @@ export const ITEMS = {
   matches: { name: 'Box of matches', cat: 'fuel', kg: 0.05, desc: 'Strike-anywhere, a little damp.' },
   gas_can: { name: 'Gas can', cat: 'fuel', kg: 8.5, liters: 7.5, desc: 'Two gallons of regular gasoline. Fumes are cooking in the heat.', tags: ['fuel', 'container'] },
   gas_can_empty: { name: 'Empty gas can', cat: 'fuel', kg: 1.2, desc: 'Red plastic, vapor smell only.', tags: ['fuel', 'container'] },
-  flashlight: { name: 'Flashlight', cat: 'light', kg: 0.3, desc: 'Plastic, holds three AA cells. Might work.' },
-  headlamp: { name: 'Headlamp', cat: 'light', kg: 0.1, desc: 'LED. Leaves your hands free.' },
+  flashlight: { name: 'Flashlight', cat: 'light', kg: 0.3, desc: 'Plastic, holds three AA cells. Might work.', light: { minutes: 480, radius: 6, intensity: 12, color: 0xffefce } },
+  headlamp: { name: 'Headlamp', cat: 'light', kg: 0.1, desc: 'LED. Leaves your hands free.', light: { minutes: 600, radius: 5, intensity: 10, color: 0xe8f0ff }, wear: { handsFree: true } },
   aa_batteries: { name: 'Pack of AA batteries', cat: 'light', kg: 0.1, desc: 'Four alkaline cells.' },
-  candle: { name: 'Candle', cat: 'light', kg: 0.2, desc: 'Scented jar candle. Fire risk in a dry house.', tags: ['fuel'] },
-  camp_lantern: { name: 'Battery lantern', cat: 'light', kg: 0.5, desc: 'LED camping lantern.' },
+  candle: { name: 'Candle', cat: 'light', kg: 0.2, desc: 'Scented jar candle. Fire risk in a dry house.', tags: ['fuel'], light: { minutes: 360, radius: 4, intensity: 7, color: 0xffb65b, placed: true, heat: 0.7 } },
+  camp_lantern: { name: 'Battery lantern', cat: 'light', kg: 0.5, desc: 'LED camping lantern.', light: { minutes: 360, radius: 7, intensity: 15, color: 0xffedc7, placed: true } },
   glow_sticks: { name: 'Glow sticks', cat: 'light', kg: 0.1, desc: 'Leftover from a birthday party. Safe light for a child.', use: { morale: 2 }, tags: ['child'] },
   radio_handcrank: { name: 'Hand-crank radio', cat: 'light', kg: 0.4, desc: 'AM/FM, weather band. Static.', use: { morale: 3 } },
 
   // ---- clothing ----
-  hat_wide: { name: 'Wide-brim hat', cat: 'clothing', kg: 0.12, desc: 'Straw with a sweat-stained band.' },
-  shirt_cotton: { name: 'Cotton shirt', cat: 'clothing', kg: 0.25, desc: 'Long-sleeved, light colored. Better than bare skin.' },
-  boots_work: { name: 'Sturdy boots', cat: 'clothing', kg: 1.4, desc: 'Leather work boots. Asphalt is hot enough to blister bare feet.' },
-  sunglasses: { name: 'Sunglasses', cat: 'clothing', kg: 0.04, desc: 'Scratched polarized lenses.' },
-  bandana: { name: 'Bandana', cat: 'clothing', kg: 0.05, desc: 'Cotton. Wet it and tie it on your neck.' },
-  sneakers: { name: 'Sneakers', cat: 'clothing', kg: 0.8, desc: 'Worn, comfortable, thin soles.' },
-  kids_clothes: { name: "Child's play clothes", cat: 'clothing', kg: 0.3, desc: 'Cotton shorts and a shirt, sized small.', tags: ['child'] },
+  hat_wide: { name: 'Wide-brim hat', cat: 'clothing', kg: 0.12, desc: 'Straw with a sweat-stained band.', wear: { sunReduction: 0.35 } },
+  shirt_cotton: { name: 'Cotton shirt', cat: 'clothing', kg: 0.25, desc: 'Long-sleeved, light colored. Better than bare skin.', wear: {} },
+  boots_work: { name: 'Sturdy boots', cat: 'clothing', kg: 1.4, desc: 'Leather work boots. Asphalt is hot enough to blister bare feet.', wear: {} },
+  sunglasses: { name: 'Sunglasses', cat: 'clothing', kg: 0.04, desc: 'Scratched polarized lenses.', wear: { sunReduction: 0.10 } },
+  bandana: { name: 'Bandana', cat: 'clothing', kg: 0.05, desc: 'Cotton. Wet it and tie it on your neck.', wear: { wetMinutes: 100 } },
+  sneakers: { name: 'Sneakers', cat: 'clothing', kg: 0.8, desc: 'Worn, comfortable, thin soles.', wear: {} },
+  kids_clothes: { name: "Child's play clothes", cat: 'clothing', kg: 0.3, desc: 'Cotton shorts and a shirt, sized small.', tags: ['child'], wear: {} },
 
   // ---- misc ----
   car_keys: { name: 'Car keys', cat: 'misc', kg: 0.1, desc: 'Fob and house key. Tank is a quarter full.' },
