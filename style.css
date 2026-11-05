@@ -108,3 +108,13 @@ button:disabled { opacity: 0.45; cursor: default; }
 #beat-choice button { display: block; width: 100%; margin: 10px 0 0; padding: 12px; text-align: left; }
 #outage-cut { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: #000; color: #eee8dc; font: 32px Georgia, serif; letter-spacing: .12em; opacity: 0; pointer-events: all; transition: opacity 1.1s ease; }
 #outage-cut.black { opacity: 1; }
+
+#objectives .later { opacity: .65; }
+#objectives .current { color: var(--text); }
+#objectives .now { flex-basis: 100%; color: #fff4ce; border: 1px solid #f4ca6b; background: #29271f; padding: 8px; text-align: left; font-size: 13px; }
+#objectives .now span { white-space: nowrap; color: #ffcf68; text-decoration: underline; }
+#menu button.beat-action { border-left: 4px solid #ffcf68; background: #49402b; color: #fff4ce; }
+#beat-choice button { background: #2b2622; border: 1px solid #b0a38e; color: var(--text); }
+#beat-choice button:hover { background: #3a332c; }
+#beat-choice button:focus-visible { outline: 2px solid var(--sel); outline-offset: 2px; }
+#objectives .todo-list { display: flex; flex-wrap: wrap; gap: 4px 14px; max-height: 100px; overflow-y: auto; width: 100%; }

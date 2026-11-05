@@ -151,11 +151,12 @@ export class Member {
     this.task = null;
     this.goal = null;
     this.path = [];
+    this.stall = null;
   }
 
   moveTo(x, y, goal = null) {
     if (this.task?.type === 'carAC') this.stopTask(true);
-    if (!this.canAct()) return false;
+    if (!this.canAct() || this.away) return false;
     const [cx, cy] = this.cell();
     const p = findPath(this.game.map, cx, cy, x, y);
     if (!p) return false;
@@ -181,7 +182,7 @@ export class Member {
   // Commands a parent gives a kid (or the other parent).
   order(type, from) {
     const g = this.game;
-    if (!this.canAct()) return;
+    if (!this.canAct() || this.away) return;
     if (type === 'watch') { this.keepWatch(); return; }
     if (this.flags.wandered) {
       g.log(`A parent needs to come and fetch ${this.name}.`, 'warn');
@@ -231,7 +232,7 @@ export class Member {
     if (this.task?.type === 'assist') { this.stayNear(this.task.lead, 1.6); return; }
     if (this.mode.type === 'follow') {
       const p = g.family.find((m) => m.id === this.mode.who);
-      if (!p || p.dead) { this.mode = { type: 'stay' }; return; }
+      if (!p || p.dead || p.away) { this.mode = { type: 'stay' }; return; }
       this.stayNear(p, 2.4);
     }
   }
@@ -248,7 +249,7 @@ export class Member {
   // Walk to the closest standing spot among `cells`, then start goal.
   approach(cells, goal, what) {
     if (this.task?.type === 'carAC') this.stopTask(true);
-    if (!this.canAct()) return false;
+    if (!this.canAct() || this.away) return false;
     const map = this.game.map;
     const [cx, cy] = this.cell();
     let best = null;
@@ -293,7 +294,7 @@ export class Member {
     const dur = {
       search: (o?.home ? 4 : o?.car ? 6 : 8) * slow,
       open: 0.3, drinkTap: 3, drinkTub: 2, fillCont: 4, soak: 5, douse: 3, fillTub: Infinity, sleep: Infinity, drag: Infinity,
-      job: g.job?.dur ?? 15, system: g.duration ?? 3, prologue: g.duration ?? 1,
+      sit: Infinity, leisure: 2, job: g.job?.dur ?? 15, system: g.duration ?? 3, prologue: g.duration ?? 1,
     }[g.type] ?? 1;
     if (g.type === 'fillTub') {
       const other = this.game.family.find((m) => m !== this && m.task?.type === 'fillTub');
@@ -437,11 +438,27 @@ export class Member {
     }
 
     if (dtMin <= 0) return;
-    if (this.ai && sim.phase !== 'prologue') this.think(dtMin);
+    if (this.ai) this.think(dtMin);
     else if (this.task?.type === 'assist' && this.canAct()) { this.assistT = (this.assistT || 0) - dtMin; if (this.assistT <= 0) { this.assistT = 0.5; this.stayNear(this.task.lead, 1.6); } }
     if (this.task?.type === 'assist' && (!this.task.lead.task && !this.task.lead.goal || this.task.lead.dead)) this.task = null;
     this.updateTask(dtMin);
     this.updateBody(dtMin);
+    this.guardProgress(dtMin);
+  }
+
+  // Progress means movement or useful work, not just a timer ticking while blocked.
+  // Quietly release stale orders, including unreachable goals and interrupted helper jobs.
+  guardProgress(dtMin) {
+    const work = this.task || this.goal;
+    if (!work || this.away || this.asleep || this.collapsed || ['carAC', 'sit'].includes(work.type)) { this.stall = null; return; }
+    const progress = [this.pos.x, this.pos.z, this.task?.type === 'assist' ? this.task.lead.task?.t || 0 : this.task?.t || 0, this.task?.type === 'fillTub' ? this.game.sim.tubL : 0];
+    const prev = this.stall;
+    const changed = !prev || prev.work !== work || progress.some((v, i) => Math.abs(v - prev.progress[i]) > 0.001);
+    this.stall = { work, progress, minutes: changed ? 0 : prev.minutes + dtMin };
+    if (this.stall.minutes >= 30) {
+      this.stopTask(true);
+      if (this.ai) this.mode = { type: 'stay' };
+    }
   }
 
   finishDrag() {
@@ -684,6 +701,7 @@ export class Member {
   }
 
   status() {
+    if (this.away) return ['Away', 'ok'];
     if (this.dead) return ['Dead', 'dead'];
     if (this.collapsed) return ['Collapsed: heat stroke', 'bad'];
     if (this.bodyT >= EXHAUSTION_F) return ['Heat exhaustion', 'bad'];
@@ -701,6 +719,7 @@ export class Member {
 
   doing() {
     const t = this.task;
+    if (this.away) return 'Away from home';
     if (this.dead) return '';
     if (this.draggedBy) return `Being dragged by ${this.draggedBy.name}`;
     if (this.collapsed) return 'Unconscious';
@@ -709,6 +728,7 @@ export class Member {
     if (t) {
       const o = t.obj ? t.obj.name.toLowerCase() : '';
       return {
+        sit: 'Sitting', leisure: 'Taking a moment',
         prologue: t.obj?.name ? `Using the ${t.obj.name.toLowerCase()}` : 'Busy',
         carAC: 'Cooling in the car (burning fuel)',
         system: t.waitingPower ? 'Waiting for daylight power' : { visitWalt: 'Visiting Walt', waterWalt: 'Bringing Walt water', cook: 'Cooking on the yard grill', enterCar: 'Getting into the car', placeFan: 'Setting up the fan', nebulizer: 'Nebulizer treatment', recharge: 'Charging from daylight', radio: 'Cranking the radio' }[t.action] || 'Working',

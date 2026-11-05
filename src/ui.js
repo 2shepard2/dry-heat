@@ -15,6 +15,7 @@ export class UI {
       const b = e.target.closest('button');
       if (b) game.setSpeed(Number(b.dataset.s));
     });
+    $('#objectives').addEventListener('click', (e) => { if (e.target.closest('.now')) game.showBeatTarget?.(); });
     // pointerdown, not click: the HUD re-renders several times a second
     $('#family').addEventListener('pointerdown', (e) => {
       const c = e.target.closest('.card');
@@ -47,7 +48,7 @@ export class UI {
   menu(x, y, items, title = '') {
     const el = $('#menu');
     el.innerHTML = (title ? `<div class="mt">${esc(title)}</div>` : '') + items.map((it, i) =>
-      `<button data-i="${i}" ${it.disabled ? 'disabled' : ''}>${esc(it.label)}${it.hint ? `<small>${esc(it.hint)}</small>` : ''}</button>`).join('');
+      `<button class="${it.primary ? 'beat-action' : ''}" data-i="${i}" ${it.disabled ? 'disabled' : ''}>${esc(it.label)}${it.hint ? `<small>${esc(it.hint)}</small>` : ''}</button>`).join('');
     el.classList.remove('hidden');
     const r = el.getBoundingClientRect();
     el.style.left = Math.min(x, innerWidth - r.width - 8) + 'px';
@@ -82,8 +83,10 @@ export class UI {
     for (const b of document.querySelectorAll('#speed button')) b.classList.toggle('on', Number(b.dataset.s) === sim.speed);
 
     // objectives
-    $('#objectives').innerHTML = g.objectives.map((o) =>
-      `<div class="${o.done ? 'done' : o.failed ? 'failed' : ''}">${o.done ? '☑' : o.failed ? '☒' : '☐'} ${esc(o.text)}</div>`).join('');
+    const guide = sim.power ? g.beats?.guidance() : null;
+    set($('#objectives'), '<div class="todo-list">' + g.objectives.map((o) =>
+      `<div class="${o.done ? 'done' : o.failed ? 'failed' : o.prologue && !o.current ? 'later' : 'current'}">${o.done ? '☑ ' : o.failed ? '☒ ' : o.prologue && !o.current ? '' : '☐ '}${esc(o.text)}</div>`).join('') + '</div>' +
+      (guide ? `<button class="now" title="Center the camera and select the family member"><b>Now:</b> ${esc(guide.text)}${guide.target ? ' <span>Show me ↗</span>' : ''}</button>` : ''));
 
     // family cards
     set($('#family'), g.family.map((m) => {

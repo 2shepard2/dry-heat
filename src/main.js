@@ -612,12 +612,21 @@ marker.visible = false;
 marker.userData.t = 0;
 scene.add(marker);
 function select(m, add) {
-  if (m.dead) return;
+  if (m.dead || m.away) return;
   if (m.ai) return; // kids aren't steered; click them for commands instead
   if (add) {
     game.selected = game.selected.includes(m) ? game.selected.filter((x) => x !== m) : [...game.selected, m];
   } else game.selected = [m];
 }
+
+game.showBeatTarget = () => {
+  const guide = game.beats.guidance();
+  if (!guide) return;
+  const crew = game.family.filter((m) => guide.crew.includes(m.id) && !m.ai && !m.away);
+  if (crew.length) game.selected = crew;
+  const target = guide.target;
+  if (target) cam.target.set(target.pos?.x ?? target.x + (target.w || 1) / 2, 0, target.pos?.z ?? target.y + (target.h || 1) / 2);
+};
 
 function commandMove(x, y) {
   const group = game.selected.filter((m) => m.canAct() && m.willObey());
@@ -634,20 +643,39 @@ function commandMove(x, y) {
 }
 
 function objectMenu(o, cx, cy) {
-  const group = game.selected.filter((m) => m.canAct());
+  const group = game.selected.filter((m) => m.canAct() && !m.away);
   const lead = group[0];
   if (!lead) { game.log('Pick someone first: click a family member or their card.', 'warn'); return; }
   const items = [];
   if (sim.phase === 'prologue') {
     const d = game.beats.current?.do;
-    const target = o.beatTargets?.find((t) => t === d?.target) || (o.car && d?.type === 'trip' ? 'car' : o.beatTargets?.[0]);
-    const relevant = target && (d?.target === target || (target === 'car' && d?.type === 'trip'));
-    const labels = { use: 'Use', order: 'Ask to use', together: 'Help together at', walk: 'Walk to', trip: d?.label || 'Drive to' };
-    ui.menu(cx, cy, [{ label: relevant ? `${labels[d.type] || 'Look at'} ${o.name}` : o.name, disabled: !relevant, fn: () => game.beats.interact(target, group) }], o.name); return;
+    const target = o.beatTargets?.find((t) => t === d?.target) || (o.car && ['trip', 'together'].includes(d?.type) ? d.target : null);
+    if (target && ['use', 'order', 'together', 'walk', 'trip'].includes(d?.type)) {
+      items.push({ label: game.beats.guidance().text, primary: true,
+        disabled: game.beats.waiting || game.beats.pending || !!game.beats.trip || !!game.beats.boarding,
+        fn: () => game.beats.interact(target, group) });
+    }
+    if (o.kind === 'bed' && d?.type === 'sleep') items.push({ label: 'Everyone: go to bed', primary: true, fn: () => game.beats.sleep() });
   }
-  if (o.prologueProp) { ui.menu(cx, cy, [{ label: o.name, disabled: true }], o.name); return; }
-  if (o.site) { ui.menu(cx, cy, game.systems.menu(o, lead, group), o.name); return; }
-  if (o.car && o.home) items.push(...game.systems.carMenu(lead));
+  if (o.site) {
+    const siteItems = sim.power && o.kind === 'panel'
+      ? [{ label: 'Build small daytime circuit' }] : game.systems.menu(o, lead, group);
+    if (sim.power && ['window', 'panel'].includes(o.kind)) {
+      for (const it of siteItems) { it.disabled = true; it.hint = o.kind === 'window' ? 'The AC is on; no need to shade the windows yet.' : 'The grid is on; Walt’s emergency circuit is not needed yet.'; }
+    }
+    ui.menu(cx, cy, [...items, ...siteItems], o.name); return;
+  }
+  if (o.prologueProp) {
+    const label = { coffee: 'Make coffee', desk: 'Sit at the work desk', 'dinner-table': 'Sit at the table', sprinkler: 'Enjoy the sprinkler',
+      store: 'Look toward Fry’s', 'gas-station': 'Look toward Circle K' }[o.key] || `Walk to ${o.name}`;
+    items.push({ label, fn: () => lead.useObject(o, ['desk', 'dinner-table'].includes(o.key) ? 'sit' : 'leisure') });
+    ui.menu(cx, cy, items, o.name); return;
+  }
+  if (o.car && o.home) {
+    const carItems = game.systems.carMenu(lead);
+    if (sim.power) for (const it of carItems) { it.disabled = true; it.hint = 'The house AC is running; cool off indoors.'; }
+    items.push(...carItems);
+  }
   const who = group.length > 1 ? `${lead.name}` : lead.name;
   if (o.kind === 'container') {
     if (o.unseen?.length) items.push({ label: `Search again (${who})`, hint: 'look for what was missed', fn: () => lead.useObject(o, 'search') });
@@ -660,7 +688,7 @@ function objectMenu(o, cx, cy) {
   } else if (o.kind === 'tub') {
     if (o.home) {
       const p = sim.pressure();
-      items.push({ label: `Fill the tub (${who})`, disabled: p <= 0.001 || sim.tubL >= sim.TUB_MAX, hint: p <= 0.001 ? 'no pressure' : `${Math.round(sim.tubL)}/${sim.TUB_MAX} L`, fn: () => lead.useObject(o, 'fillTub') });
+      items.push({ label: `Fill the tub (${who})`, disabled: sim.power || p <= 0.001 || sim.tubL >= sim.TUB_MAX, hint: sim.power ? 'The taps work normally; no need to store bathwater yet.' : p <= 0.001 ? 'no pressure' : `${Math.round(sim.tubL)}/${sim.TUB_MAX} L`, fn: () => lead.useObject(o, 'fillTub') });
       for (const m of group) items.push({ label: `Drink from the tub (${m.name})`, disabled: sim.tubL < 1, fn: () => m.useObject(o, 'drinkTub') });
       for (const m of group) items.push({ label: `Soak a towel and cool off (${m.name})`, hint: '2 L', disabled: sim.tubL < 2, fn: () => m.useObject(o, 'soak') });
       items.push({ label: `Fill containers from the tub (${who})`, disabled: sim.tubL < 0.5 || !lead.inv.some(refillable), hint: lead.inv.some(refillable) ? '' : 'carrying nothing to fill', fn: () => lead.useObject(o, 'fillCont') });
@@ -674,18 +702,22 @@ function objectMenu(o, cx, cy) {
         disabled: !able, fn: () => game.mattressJob(lead, crew) });
     }
   }
+  if (o.ch === 'L') items.push({ label: `Sit (${lead.name})`, fn: () => lead.useObject(o, 'sit') });
   for (const it of items) { const f = it.fn; if (f) it.fn = () => { const who = game.selected.find((m) => m.canAct()); if (!who || who.willObey()) f(); }; }
   ui.menu(cx, cy, items, o.name + (o.car && o.home ? ` · ${o.fuelL.toFixed(1)} L` : '') + (o.home || o.lot < 0 ? '' : ` · ${map.lots[o.lot].name}`));
 }
 
 function memberMenu(v, cx, cy) {
   const d = game.beats?.current?.do;
+  const beatItems = [];
   if (sim.phase === 'prologue' && ((d?.type === 'order' && d.kid === v.id) || (d?.type === 'use' && ((d.target === 'inhaler' && v.id === 'theo') || d.who === v.id)))) {
     const who = d.who ? game.family.filter((m) => m.id === d.who) : game.selected;
-    ui.menu(cx, cy, [{ label: d.type === 'order' ? `${v.name}: ${d.target === 'car' ? 'Get in the car' : 'Wash dishes'}` : d.target === 'inhaler' ? 'Give Theo the inhaler' : `Use ${game.beats.targets[d.target]?.name || d.target}`, fn: () => game.beats.interact(d.target, who) }], v.name); return;
+    beatItems.push({ label: d.type === 'order' ? `${v.name}: ${d.target === 'car' ? 'Get in the car' : 'Wash dishes'}` : d.target === 'inhaler' ? 'Give Theo the inhaler' : `Use ${game.beats.targets[d.target]?.name || d.target}`,
+      primary: true, disabled: v.away || game.beats.waiting || game.beats.pending || !!game.beats.trip || !!game.beats.boarding,
+      fn: () => game.beats.interact(d.target, who) });
   }
   const helpers = game.selected.filter((m) => m !== v && m.canAct());
-  const items = v.ai ? [] : [{ label: `Select ${v.name}`, disabled: v.dead, fn: () => select(v, false) }];
+  const items = v.ai ? [...beatItems] : [...beatItems, { label: `Select ${v.name}`, disabled: v.dead, fn: () => select(v, false) }];
   const boss = helpers[0];
   if (v.canAct()) items.push({ label: 'Worn items and lights', fn: () => game.equipmentMenu(v, cx, cy) });
   if (!v.ai) items.push({ label: 'Keep watch', hint: 'at home · costs rest · H',

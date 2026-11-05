@@ -3,20 +3,29 @@
 // Interpreter: Codex (src/beats.js).
 //
 // Beats run in array order. A beat starts when the previous beat is done AND the clock has reached `at`.
-// On start: the objective panel is replaced by `objectives`, `lines` are spoken in order (a second or two
-// apart, as  Name: "text"  in the log), `log` is printed, and `teach` shows its control hint once.
-// The beat is done when its `do` is satisfied (or after `timeout` game minutes if `optional`).
+// Between beats the clock runs normally; only an explicit sleep skips to the next morning.
+// On start: `objectives` lead the day’s accumulated to-do list; `lines` are spoken in order,
+// 2.5 real seconds apart, as Name: "text" in the log. `log` prints and `teach` shows its hint once.
+// The beat is done when `do`, any `then` trip, and its spoken lines finish (or on an optional timeout).
 // Nothing in a prologue beat can hurt anyone. The narration never says why something matters.
 //
 // Schema
 //   id          'p1', 'p4a', ... (matches STORY.md section 1)
 //   day         -1 = Thursday July 9, 0 = Friday July 10
-//   at          earliest clock minute (0-1439) the beat may start; the clock jumps forward to it if idle
+//   at          earliest clock minute (0-1439) the beat may start
 //   lines       [{ who: 'marcus'|'elena'|'jess'|'theo'|'walt'|'pruitt'|'okafor'|'radio', text }]
 //   log         optional plain narration line (sober, present tense, one sentence)
-//   objectives  array of short strings: the WHOLE objective panel while this beat runs. Ordinary life on
+//   objectives  array of short strings, added to the day’s persistent list. Ordinary life on
 //               Thursday ("Make coffee", "Get Theo to day camp", "Finish the Hendricks deck"). This list is
 //               where the theme lives: the outage later replaces it with survival, without comment.
+//   covers      optional array parallel to objectives: beat id that completes each item;
+//               'camp-pickup' / 'friday-camp-pickup' are completed by the scheduled return, not the order
+//   activeObjective optional index of the current action in objectives (default 0); other items are dim
+//   then        optional { type: 'trip', who: [ids], target, minutes?, until?, label, away? }
+//               starts after do succeeds; everyone walks to the car before leaving; beat waits for return
+//               until = local clock minute of return on this beat's day (otherwise minutes = trip length)
+//               away: { who, until, pickup, minutes?, id? } keeps one traveller off map after driver returns;
+//               pickup leaves minutes (default 20) before until, then both come home and id completes
 //   teach       optional one-line control hint shown once, e.g. 'Right-click to walk. Click furniture for actions.'
 //   do          what the player must do; one of:
 //     { type: 'use', who?, target }               a family member (any, or `who`) uses the target
@@ -24,7 +33,7 @@
 //     { type: 'walk', who?, target }              someone reaches the target
 //     { type: 'together', target }                both parents work the target together (help system)
 //     { type: 'trip', who: [ids], target, minutes, label }  they leave by car (off map) and come back
-//     { type: 'choice', flag, prompt, options: [{ value, label, lines?, log?, minutes? }] }
+//     { type: 'choice', flag, prompt, target?, who?: [ids], options: [{ value, label, lines?, log?, minutes? }] }
 //                                                 a small card with 2-3 buttons; sets decisions[flag]=value;
 //                                                 `minutes` = time the option costs; `lines` play after picking
 //     { type: 'sleep' }                           everyone is put to bed (Z) and the day rolls over
@@ -44,6 +53,7 @@
 export const BEATS = [
   {
     id: 'p1', day: -1, at: 7 * 60 + 15,
+    covers: ['p1', 'p2', 'p3'],
     objectives: ['Make coffee', 'Get Theo to day camp', 'Finish the Hendricks deck by noon'],
     lines: [
       { who: 'elena', text: 'Your lunch is in the blue bag. The ice pack is on the left.' },
@@ -59,6 +69,8 @@ export const BEATS = [
 
   {
     id: 'p2', day: -1, at: 7 * 60 + 30,
+    covers: ['p2', 'p3', 'p3'],
+    then: { type: 'trip', who: ['marcus', 'theo'], target: 'car', until: 8 * 60 + 25, label: 'Marcus drives Theo to day camp', away: { who: 'theo', until: 15 * 60, pickup: 'elena', minutes: 20, id: 'camp-pickup' } },
     objectives: ['Get Theo to day camp', 'Take the nine o\'clock call', 'Finish the Hendricks deck by noon'],
     lines: [
       { who: 'theo', text: 'I have a stomachache.' },
@@ -75,6 +87,7 @@ export const BEATS = [
 
   {
     id: 'p3', day: -1, at: 8 * 60 + 30,
+    covers: ['p3', 'p4a', 'camp-pickup'],
     objectives: ['Finish the Hendricks deck', 'Take the two o\'clock call', 'Get Theo from camp at three'],
     lines: [
       { who: 'elena', text: 'Is that the Hendricks thing again?' },
@@ -90,6 +103,7 @@ export const BEATS = [
 
   {
     id: 'p4', day: -1, at: 12 * 60,
+    covers: ['p4', 'camp-pickup', 'p3'],
     objectives: ['Ask Jess to do the dishes', 'Pick Theo up from camp', 'Finish the Hendricks deck'],
     lines: [
       { who: 'elena', text: 'Ask Jess to do the dishes.' },
@@ -105,6 +119,7 @@ export const BEATS = [
 
   {
     id: 'p4a', day: -1, at: 13 * 60 + 50,
+    covers: ['p4a', 'camp-pickup', 'p5'],
     objectives: ['Take the two o\'clock call', 'Get Theo from camp at three', 'Answer the client email'],
     lines: [
       { who: 'walt', text: 'Which one is mine? They have moved them again.' },
@@ -114,7 +129,7 @@ export const BEATS = [
     ],
     log: 'Walt is in his slippers in the middle of the street with a letter opener in his hand.',
     do: {
-      type: 'choice', flag: 'walt',
+      type: 'choice', flag: 'walt', target: 'walt-mailbox',
       prompt: 'Walt is looking for his mailbox. You have a call at two.',
       options: [
         {
@@ -149,7 +164,7 @@ export const BEATS = [
     ],
     log: 'Fourteen gallon jugs, ten full and four half, on the shelf above the tool chest.',
     do: {
-      type: 'choice', flag: 'jugs',
+      type: 'choice', flag: 'jugs', target: 'garage-jugs',
       prompt: 'Elena wants the garage floor for the second car. The jugs have to go somewhere.',
       options: [
         {
@@ -205,6 +220,7 @@ export const BEATS = [
 
   {
     id: 'p8', day: -1, at: 22 * 60,
+    activeObjective: 2,
     objectives: ['Finish a chapter', 'Lock up', 'Go to bed'],
     lines: [
       { who: 'elena', text: 'I am going up.' },
@@ -220,6 +236,8 @@ export const BEATS = [
 
   {
     id: 'p9', day: 0, at: 7 * 60 + 40,
+    covers: ['p9', 'p9', 'p9'],
+    then: { type: 'trip', who: ['elena', 'theo'], target: 'car', until: 9 * 60 + 15, label: 'Elena drives Theo to morning camp', away: { who: 'theo', until: 12 * 60, pickup: 'elena', minutes: 20, id: 'friday-camp-pickup' } },
     objectives: ['Check the inhaler', 'Make breakfast', 'Get Theo to camp'],
     lines: [
       { who: 'elena', text: 'It is almost empty. Did we refill this?' },
@@ -235,6 +253,8 @@ export const BEATS = [
 
   {
     id: 'p10', day: 0, at: 9 * 60 + 30,
+    covers: ['p11', 'p11', 'p10'],
+    then: { type: 'trip', who: ['marcus', 'elena'], target: 'store', minutes: 35, label: 'Marcus and Elena drive to Fry’s and the pharmacy' },
     objectives: ['Get the groceries', 'Pick up the pharmacy order', 'Get home before the heat'],
     lines: [
       { who: 'jess', text: 'I am not his babysitter.' },
@@ -250,6 +270,7 @@ export const BEATS = [
 
   {
     id: 'p11', day: 0, at: 10 * 60 + 15,
+    activeObjective: 1,
     objectives: ['Pay for the groceries', 'Put one thing back on the belt', 'Get the car started'],
     lines: [
       { who: 'marcus', text: 'It was declined.' },
@@ -259,7 +280,7 @@ export const BEATS = [
     ],
     log: 'Elena looks at the screen on the card reader, not at him.',
     do: {
-      type: 'choice', flag: 'cart',
+      type: 'choice', flag: 'cart', target: 'store', who: ['marcus', 'elena'],
       prompt: 'One thing has to go back on the belt. The pharmacy order is forty-five dollars.',
       options: [
         {
@@ -310,6 +331,8 @@ export const BEATS = [
 
   {
     id: 'p13', day: 0, at: 16 * 60,
+    activeObjective: 2,
+    covers: ['p3', 'p13', 'p14a'],
     objectives: ['Finish the Hendricks deck', 'Get the laundry off the line', 'Watch the sky'],
     lines: [
       { who: 'pruitt', text: 'They said the grid was strained. Said it on the radio.' },
@@ -325,6 +348,7 @@ export const BEATS = [
 
   {
     id: 'p13a', day: 0, at: 17 * 60,
+    then: { type: 'trip', who: ['marcus', 'theo'], target: 'gas-station', minutes: 20, label: 'Marcus and Theo drive to the gas station' },
     objectives: ['Fill the tank', 'Get home before dark', 'Start dinner'],
     lines: [
       { who: 'theo', text: 'Are we going to the store?' },
@@ -333,7 +357,7 @@ export const BEATS = [
     ],
     log: 'The gauge is under a quarter of a tank. It is fifty-eight dollars to fill it.',
     do: {
-      type: 'choice', flag: 'gas',
+      type: 'choice', flag: 'gas', target: 'gas-station', who: ['marcus', 'theo'],
       prompt: 'The gauge is low. It is fifty-eight dollars to fill the tank.',
       options: [
         {

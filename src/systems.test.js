@@ -214,6 +214,7 @@ function prologue(beats) {
   f.g.selected = [f.m];
   const choices = [];
   f.b = new Prologue(f.g, { ...(beats ? { beats } : {}), present: (c) => choices.push(c) });
+  if (beats?.length) f.g.sim.min = beatMinute(beats[0]);
   f.choices = choices; f.b.start(); return f;
 }
 const flushLines = (b) => { for (let i = 0; i < 20; i++) b.update(0, 2); };
@@ -281,7 +282,10 @@ test('all three cart outcomes and jugs/gas/Walt are applied at the cut', () => {
 test('trip hides the car and its crew for the specified minutes, then restores both', () => {
   const { g, b } = prologue([{ id: 'trip', day: -1, at: 500, do: { type: 'trip', who: ['marcus', 'elena'], target: 'store', minutes: 30, label: 'Grocery run' } }]);
   b.targets.car.mesh = { visible: true };
-  assert.ok(b.interact('car')); assert.equal(b.targets.car.mesh.visible, false);
+  assert.ok(b.interact('car'));
+  for (const member of g.family.slice(0, 2)) finish(member);
+  b.update(0, 0);
+  assert.equal(b.targets.car.mesh.visible, false);
   assert.equal(g.map.walkable(b.targets.car.x, b.targets.car.y), true);
   assert.ok(g.family.slice(0, 2).every((m) => m.away && !m.obj.visible));
   g.sim.step(29); b.update(29, 0); assert.ok(b.trip);
@@ -299,6 +303,7 @@ test('together requires both parents; child order completes only with the named 
   assert.equal(b.interact('store', [m]), false);
   assert.ok(b.interact('store', [m, e])); arrive(m); arrive(e); finish(m); assert.equal(b.pending, false); finish(e); flushLines(b);
   assert.ok(b.completed.has('team'));
+  g.sim.step(5); b.update(5, 0);
   assert.equal(b.notify('order', 'theo', 'sink'), false);
   assert.ok(b.interact('sink', [m])); finish(g.family.find((m) => m.id === 'jess')); flushLines(b);
   assert.ok(b.completed.has('kid'));
@@ -313,7 +318,7 @@ test('sleep rolls to Friday, optional beat times out, wait P15 cuts to outage', 
   assert.ok(b.sleep()); b.update(0, 2);
   assert.equal(g.sim.day, 0); assert.equal(g.sim.dateLabel(), 'Friday, July 10');
   b.update(3, 2); assert.equal(g.flags.sawSky, true);
-  b.update(2, 2); assert.equal(g.sim.phase, 'outage'); assert.equal(g.sim.min, 340);
+  g.sim.step(60); b.update(0, 0); b.update(2, 2); assert.equal(g.sim.phase, 'outage'); assert.equal(g.sim.min, 340);
 });
 
 test('prologue stays safe through a long wait; windows finish indoors, status never empty', () => {
@@ -334,7 +339,149 @@ test('optional choice expires and named child use is supported', () => {
     { id: 'optional', day: -1, at: 435, optional: true, timeout: 5, do: { type: 'choice', flag: 'walt', options: [{ value: 'walked', label: 'Walk him home' }] } },
     { id: 'child-use', day: -1, at: 440, do: { type: 'use', who: 'theo', target: 'sprinkler' } },
   ]);
-  assert.equal(b.paused, false); b.update(5, 2); assert.ok(b.completed.has('optional'));
+  assert.equal(b.paused, false); g.sim.step(5); b.update(5, 2); assert.ok(b.completed.has('optional'));
   assert.ok(b.interact('sprinkler')); finish(g.family.find((m) => m.id === 'theo')); flushLines(b);
   assert.ok(b.completed.has('child-use'));
+});
+
+
+// Use the same entry points as object/kid menu callbacks, choice buttons and Z.
+// Never teleport arrivals, assign a task directly, call notify, or use jumpBeat.
+test('fresh no-jump playthrough: all 18 beats, real paths/trips, clock, decisions and no stalls', async () => {
+  const { BEATS } = await import('./data/beats.js');
+  for (const picks of [
+    { walt: 'walked', jugs: 'shelf', cart: 'pharmacy', gas: 'full' },
+    { walt: 'wavedOff', jugs: 'recycled', cart: 'birthday', gas: 'quarter' },
+  ]) {
+    const { g, b, messages, m, e } = prologue();
+    g.jumpBeat = () => assert.fail('playthrough must never jumpBeat');
+    b.targets.car.mesh = { visible: true };
+    let seconds = 0;
+    const issued = new Set(), seenAway = new Set(), independentStalls = new Map();
+    const completedObjectives = new Set();
+    let campSeen = false, pickupSeen = false, fridayCampSeen = false;
+    while (g.sim.phase === 'prologue' && seconds < 1200) {
+      const beat = b.current, d = beat?.do;
+      if (beat && !b.waiting && !issued.has(beat.id)) {
+        if (d.type === 'choice') {
+          if (b.choiceReady) { assert.ok(g.pickChoice(picks[d.flag])); issued.add(beat.id); }
+        } else if (d.type === 'sleep') { assert.ok(b.sleep()); issued.add(beat.id); }
+        else if (['use', 'walk', 'order', 'together', 'trip'].includes(d.type)) {
+          g.selected = d.type === 'together' ? [m, e] : [g.family.find((x) => x.id === d.who && !x.ai) || m];
+          assert.ok(b.interact(d.target, g.selected), beat.id);
+          issued.add(beat.id);
+        } else issued.add(beat.id);
+      }
+      const dtReal = .1, dtMin = b.paused ? 0 : dtReal * g.sim.speed;
+      g.sim.step(dtMin);
+      for (const member of g.family) member.update(dtMin, dtReal);
+      b.update(dtMin, dtReal);
+      seconds += dtReal;
+      if (b.trip) {
+        seenAway.add(b.current.id);
+        assert.equal(b.targets.car.mesh.visible, false);
+        for (const member of b.trip.crew) { assert.equal(member.away, true); assert.equal(member.obj.visible, false); }
+      }
+      const theo = g.family.find((x) => x.id === 'theo');
+      if (g.sim.day === -1 && g.sim.hour > 8.5 && g.sim.hour < 14.6) {
+        assert.equal(theo.away, true); assert.equal(theo.obj.visible, false); campSeen = true;
+      }
+      if (g.sim.day === -1 && g.sim.hour > 14.7 && g.sim.hour < 15) {
+        assert.equal(e.away, true); assert.equal(b.targets.car.mesh.visible, false); pickupSeen = true;
+      }
+      if (g.sim.day === 0 && g.sim.hour > 9.3 && g.sim.hour < 11.6) { assert.equal(theo.away, true); fridayCampSeen = true; }
+      for (const objective of g.objectives) if (objective.done) completedObjectives.add(objective.text);
+      for (const member of g.family) {
+        assert.equal(member.dead, false); assert.equal(member.collapsed, false);
+        const work = member.task || member.goal;
+        const before = independentStalls.get(member.id);
+        const progress = [member.pos.x, member.pos.z, member.task?.t || 0];
+        const changed = !before || work !== before.work || progress.some((v, i) => Math.abs(v - before.progress[i]) > .001);
+        const stalled = !work || member.away || member.asleep || changed ? 0 : before.stalled + dtMin;
+        assert.ok(stalled <= 30, `${beat.id}: ${member.name} stuck for ${stalled}`);
+        independentStalls.set(member.id, { work, progress, stalled });
+      }
+    }
+    assert.equal(g.sim.phase, 'outage', `timed out at ${b.current?.id}: ${g.sim.clock()}`);
+    assert.ok(BEATS.every((beat) => b.completed.has(beat.id)));
+    assert.equal(BEATS.length, 18);
+    assert.equal(g.sim.day, 1); assert.equal(g.sim.min, 340);
+    assert.deepEqual(g.decisions, picks);
+    assert.equal(g.systems.car.fuelL, picks.gas === 'full' ? 55 : 14);
+    assert.equal(g.systems.walt.trust, picks.walt === 'walked' ? 2 : 0);
+    const home = g.map.objects.filter((o) => o.home).flatMap((o) => o.items);
+    assert.equal(home.some((i) => i.id === 'inhaler_spare'), picks.cart !== 'pharmacy');
+    const shelfStock = [];
+    g.systems.stock(g.map.objects.find((o) => o.home && o.ch === 'S' && o.x === 35), shelfStock);
+    assert.equal(shelfStock.some((i) => i.id === 'water_gallon'), picks.jugs === 'shelf');
+    assert.deepEqual([...seenAway], ['p2', 'p9', 'p10', 'p13a']);
+    assert.ok(campSeen && pickupSeen && fridayCampSeen);
+    assert.ok(b.completed.has('camp-pickup') && b.completed.has('friday-camp-pickup'));
+    assert.ok(messages.some((line) => line.includes('brings Theo home from camp')));
+    assert.ok(completedObjectives.has('Finish the Hendricks deck'));
+    assert.ok(g.family.every((member) => !member.away && member.obj.visible));
+    console.log(`No-jump playthrough at default 4x, ${picks.gas}: ${(seconds / 60).toFixed(2)} real minutes (immediate inputs; choice reading time extra)`);
+  }
+});
+
+test('choices wait for speech in real seconds, stay unpicked, and reject early input', () => {
+  const { g, b, choices } = prologue([{ id: 'speech', day: -1, at: 435,
+    lines: [{ who: 'marcus', text: 'First.' }, { who: 'elena', text: 'Second.' }],
+    do: { type: 'choice', flag: 'gas', options: [{ value: 'full', label: 'Fill up' }, { value: 'quarter', label: 'Later' }] } }]);
+  assert.equal(choices.at(-1), null); assert.equal(g.pickChoice('full'), false);
+  b.update(100, 0); assert.equal(b.lines.length, 1);
+  b.update(100, 2.4); assert.equal(b.lines.length, 1); assert.equal(b.choiceReady, false);
+  b.update(0, .1); assert.equal(b.lines.length, 0); assert.equal(b.choiceReady, false);
+  b.update(0, 2.5); assert.equal(b.choiceReady, true); assert.equal(b.paused, true);
+  assert.deepEqual(g.decisions, {}); assert.equal(choices.at(-1).flag, 'gas');
+});
+
+test('normal child orders and silent stalled-goal/task recovery work during the prologue', () => {
+  const { g, b, m, messages } = prologue();
+  const kid = g.family.find((x) => x.id === 'theo');
+  kid.order('stay', m); assert.equal(kid.mode.type, 'stay');
+  kid.order('follow', m);
+  const start = kid.pos.clone();
+  kid.update(.4, .1); assert.ok(kid.pos.distanceTo(start) > 0 || kid.path.length > 0);
+  kid.order('stay', m); assert.equal(kid.task, null); assert.equal(kid.goal, null);
+  const before = messages.length;
+  for (const member of [kid, m]) {
+    member.goal = { type: 'prologue', target: 'car' }; member.path = [];
+    member.guardProgress(0);
+    for (let i = 0; i < 31; i++) member.guardProgress(1);
+    assert.equal(member.goal, null); assert.equal(member.task, null);
+    member.task = { type: 'job', t: 0, waiting: true };
+    member.guardProgress(0); member.guardProgress(30);
+    assert.equal(member.task, null);
+  }
+  assert.equal(messages.length, before);
+  assert.match(b.guidance().text, /Marcus.*coffee.*kitchen/);
+  assert.equal(b.guidance().target, b.targets.coffee);
+});
+
+
+test('guidance follows kid orders; aurora bands project into the sky above the houses', async () => {
+  const { prologueScene } = await import('./prologue-scene.js');
+  const { g, b } = prologue();
+  const cam = { target: new THREE.Vector3(29, 0, 11), yaw: Math.PI / 4, zoom: 2.1 };
+  const visual = prologueScene(g, g.scene, cam);
+  visual.set(true, { id: 'p14a' }); visual.update(1);
+  const sky = g.scene.children.find((o) => o.material?.isShaderMaterial);
+  const camera = new THREE.OrthographicCamera(-27, 27, 15, -15, .1, 400);
+  camera.position.set(cam.target.x + Math.sin(cam.yaw) * 80, 76, cam.target.z + Math.cos(cam.yaw) * 80);
+  camera.lookAt(cam.target); camera.updateMatrixWorld(); sky.updateMatrixWorld();
+  for (const band of [.43, .63]) {
+    const v = new THREE.Vector3(0, (band - .5) * 10, 0).applyMatrix4(sky.matrixWorld).project(camera);
+    assert.ok(v.y > .6 && v.y < 1, `aurora band must be in upper sky, got ${v.y}`);
+  }
+  assert.equal(sky.rotation.x, 0);
+  visual.set(false); assert.equal(cam.zoom, 2.1);
+  b.current = { id: 'kid-marker', day: -1, at: 435, do: { type: 'order', kid: 'theo', target: 'car' } };
+  visual.update(2);
+  assert.equal(b.guidance().target.id, 'theo');
+  const beacon = g.scene.children.find((o) => o.isGroup && o.children.some((c) => c.geometry?.type === 'RingGeometry'));
+  assert.equal(beacon.visible, true);
+  assert.equal(beacon.position.x, g.family[3].pos.x);
+  assert.equal(beacon.position.z, g.family[3].pos.z);
+  assert.ok(beacon.children.every((c) => c.material.depthTest === false));
 });
