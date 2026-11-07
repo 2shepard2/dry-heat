@@ -62,10 +62,16 @@ moon.position.set(map.W / 2 - 30, 50, map.H / 2 - 20);
 moon.target.position.set(map.W / 2, 0, map.H / 2);
 scene.add(moon, moon.target);
 
+// Warm, bounded room lights: no yard-wide ambient boost when the grid is on.
+const roomLights = [[25, 7], [30, 8], [30, 12], [24, 11], [25, 14], [36, 12]].map(([x, z]) => {
+  const light = new THREE.PointLight(0xffce8c, 0, 8, 2);
+  light.position.set(x, 2.6, z); scene.add(light); return light;
+});
 const C = (h) => new THREE.Color(h);
 const SKY = { night: C(0x0a0e18), dawn: C(0xd99a6a), day: C(0xc8d3d8), haze: C(0xe1d2b4) };
 function updateLight() {
   const s = sim.sun();
+  roomLights.forEach((light) => { light.intensity = sim.power ? 32 * (1 - Math.min(1, s * 5)) : 0; });
   const a = sim.sunAngle();
   const center = new THREE.Vector3(map.W / 2, 0, map.H / 2);
   sun.position.set(center.x + Math.cos(a) * 60, 6 + Math.sin(Math.max(0, a)) * 70 * Math.max(s, 0.05), center.z + 25 * Math.max(0, Math.sin(a)));
@@ -74,9 +80,9 @@ function updateLight() {
   sun.visible = s > 0.001;
   const low = 1 - Math.min(1, s * 2.2);
   sun.color.setHex(0xfff4e2).lerp(C(0xff9a50), low);
-  hemi.intensity = 0.035 + 1.05 * Math.min(1, s * 2.2);
-  hemi.color.setHex(0x2a3858).lerp(C(0xdde6ee), Math.min(1, s * 1.5));
-  moon.intensity = 0.065 * (1 - Math.min(1, s * 4));
+  hemi.intensity = 0.38 + 1.05 * Math.min(1, s * 2.2);
+  hemi.color.setHex(0x8a9fc7).lerp(C(0xdde6ee), Math.min(1, s * 1.5));
+  moon.intensity = 0.48 * (1 - Math.min(1, s * 4));
   if (game.auroraOn) { hemi.intensity = .32; hemi.color.setHex(0x839cac); moon.intensity = .22; }
   const bg = SKY.night.clone();
   if (s > 0) bg.copy(SKY.dawn).lerp(SKY.day, Math.min(1, s * 2.5)).lerp(SKY.haze, Math.max(0, s - 0.6));
@@ -613,7 +619,8 @@ marker.userData.t = 0;
 scene.add(marker);
 function select(m, add) {
   if (m.dead || m.away) return;
-  if (m.ai) return; // kids aren't steered; click them for commands instead
+  game.detailMember = m;
+  if (m.ai) return; // inspecting children never gives direct movement control
   if (add) {
     game.selected = game.selected.includes(m) ? game.selected.filter((x) => x !== m) : [...game.selected, m];
   } else game.selected = [m];
@@ -790,6 +797,7 @@ renderer.domElement.addEventListener('pointerdown', (ev) => {
   if (ev.button !== 0) return;
   if (p.member) {
     const helpers = game.selected.filter((m) => m !== p.member && m.canAct());
+    game.detailMember = p.member;
     if (p.member.ai || ((p.member.collapsed || p.member.dead) && helpers.length)) memberMenu(p.member, ev.clientX, ev.clientY);
     else select(p.member, ev.shiftKey);
   } else if (p.obj) objectMenu(p.obj, ev.clientX, ev.clientY);
@@ -826,7 +834,7 @@ addEventListener('keydown', (e) => {
   if (k === 'z' && sim.phase === 'prologue' && game.beats.sleep()) return;
   if (k === 'z') for (const m of game.selected) if (m.canAct()) { m.stopTask(true); m.goal = { type: 'sleep', obj: null }; m.startTask(); }
   if (k === 'f') game.focusOn(game.selected[0]);
-  if (k === 'escape') { ui.hideMenu(); for (const m of game.selected) game.opens.delete(m); }
+  if (k === 'escape') { for (const m of game.selected) game.opens.delete(m); game.detailMember = null; game.selected = []; ui.hideMenu(); }
   if (k === '+' || k === '=') { cam.zoom = Math.min(4.5, cam.zoom * 1.15); placeCamera(); }
   if (k === '-') { cam.zoom = Math.max(0.7, cam.zoom / 1.15); placeCamera(); }
 });

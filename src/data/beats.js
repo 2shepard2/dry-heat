@@ -50,6 +50,16 @@
 //   walt: 'walked' | 'wavedOff'     jugs: 'shelf' | 'recycled'
 //   cart: 'water' | 'pharmacy' | 'birthday'     gas: 'full' | 'quarter'
 
+// Who does what (wave 4a): the work is shared, and every step's actor is home at that hour.
+//   Marcus  p1 coffee, p2 camp run, p3 desk, p7 Pruitt, p13 the sky, p13a the gas
+//   Elena   p4a Walt, p6 pantry, p9 the meds and the camp run, p10 the register and the drive home,
+//           p14 dinner, p14a the street
+//   Jess    p4 the dishes, p5 the jugs, p11 the groceries in, p12 the sprinkler
+//   Theo    p2 the car, p9 the inhaler, p13a the gas station; also in p12, p14 and p14a
+// The four decisions: gas is Marcus (p13a), cart is Elena (p10), jugs is Jess (p5), walt is Elena (p4a).
+// The checkout (p10) is the beat's own step and the drive home is its `then` trip, so the register
+// comes before the return. p10 and p13a both decide first and then drive.
+//
 export const BEATS = [
   {
     id: 'p1', day: -1, at: 7 * 60 + 15,
@@ -104,14 +114,13 @@ export const BEATS = [
   {
     id: 'p4', day: -1, at: 12 * 60,
     covers: ['p4', 'camp-pickup', 'p3'],
-    objectives: ['Ask Jess to do the dishes', 'Pick Theo up from camp', 'Finish the Hendricks deck'],
+    objectives: ['Ask Jess to do the dishes', 'Pick Theo up from camp at three', 'Finish the Hendricks deck'],
     lines: [
-      { who: 'elena', text: 'Ask Jess to do the dishes.' },
-      { who: 'marcus', text: 'You can ask her.' },
-      { who: 'elena', text: 'She does not listen to me. She would listen to you.' },
+      { who: 'elena', text: 'Jess, the dishes. Both plates.' },
       { who: 'jess', text: 'Sure. I will do them now. I will do them great.' },
+      { who: 'elena', text: 'She has been in that room all morning.' },
     ],
-    log: 'There are two plates in the sink at four in the afternoon and they are not clean.',
+    log: 'There are two plates in the sink and they are not clean.',
     teach: 'Click Jess, then choose an order. She gets to it when she feels like it.',
     do: { type: 'order', kid: 'jess', target: 'sink' },
     sets: ['jessDidDishes'],
@@ -119,32 +128,32 @@ export const BEATS = [
 
   {
     id: 'p4a', day: -1, at: 13 * 60 + 50,
-    covers: ['p4a', 'camp-pickup', 'p5'],
-    objectives: ['Take the two o\'clock call', 'Get Theo from camp at three', 'Answer the client email'],
+    covers: ['p4a', 'camp-pickup', 'p4a'],
+    objectives: ['Take the two o\'clock call', 'Get Theo from camp at three', 'Get back in time for the pickup'],
     lines: [
       { who: 'walt', text: 'Which one is mine? They have moved them again.' },
-      { who: 'marcus', text: 'The blue one, Walt. Third from the corner.' },
+      { who: 'elena', text: 'The blue one, Walt. Third from the corner.' },
       { who: 'walt', text: 'I have to get there before the mail comes.' },
-      { who: 'marcus', text: 'It is ten to two. I have a call at two.' },
+      { who: 'elena', text: 'It is ten to two. My sister is calling at two.' },
     ],
     log: 'Walt is in his slippers in the middle of the street with a letter opener in his hand.',
     do: {
-      type: 'choice', flag: 'walt', target: 'walt-mailbox',
-      prompt: 'Walt is looking for his mailbox. You have a call at two.',
+      type: 'choice', flag: 'walt', target: 'walt-mailbox', who: ['elena'],
+      prompt: 'Walt is looking for his mailbox. It is ten to two.',
       options: [
         {
           value: 'walked', label: 'Walk him home', minutes: 20,
           lines: [
             { who: 'walt', text: 'That is all right. You did not have to.' },
-            { who: 'marcus', text: 'It is four doors.' },
+            { who: 'elena', text: 'It is four doors.' },
           ],
-          log: 'Twenty minutes. The call is already running when he gets back in the door.',
+          log: 'Twenty minutes. Her sister calls and it rings out in the kitchen.',
         },
         {
           value: 'wavedOff', label: 'You\'re fine, Walt', minutes: 5,
           lines: [
             { who: 'walt', text: 'I am fine. I am looking for my mailbox.' },
-            { who: 'marcus', text: 'Sure.' },
+            { who: 'elena', text: 'Sure.' },
           ],
           log: 'He goes in. Walt is still at the curb when the door shuts.',
         },
@@ -155,22 +164,22 @@ export const BEATS = [
 
   {
     id: 'p5', day: -1, at: 14 * 60 + 30,
-    objectives: ['Move the jugs off the high shelf', 'Clear the garage floor for Saturday', 'Answer the client email'],
+    objectives: ['Move the jugs off the high shelf', 'Clear the garage floor for Saturday', 'Find out how many are full'],
     lines: [
-      { who: 'elena', text: 'Why do we have so many of these?' },
-      { who: 'marcus', text: 'Because of the monsoon thing in nineteen.' },
-      { who: 'marcus', text: 'Ten of them are still full.' },
-      { who: 'elena', text: 'I know how many of them are full.' },
+      { who: 'elena', text: 'I want the garage floor for the second car.' },
+      { who: 'jess', text: 'How many of them are full?' },
+      { who: 'marcus', text: 'Ten.' },
+      { who: 'jess', text: 'Then I will move them.' },
     ],
     log: 'Fourteen gallon jugs, ten full and four half, on the shelf above the tool chest.',
     do: {
-      type: 'choice', flag: 'jugs', target: 'garage-jugs',
-      prompt: 'Elena wants the garage floor for the second car. The jugs have to go somewhere.',
+      type: 'choice', flag: 'jugs', target: 'garage-jugs', who: ['jess'],
+      prompt: 'Elena wants the garage floor. The jugs have to go somewhere.',
       options: [
         {
           value: 'shelf', label: 'Put them on the shelf by the door', minutes: 10,
           lines: [
-            { who: 'marcus', text: 'They fit under the shelf by the door.' },
+            { who: 'jess', text: 'They fit under the shelf by the door.' },
             { who: 'elena', text: 'Good. Thank you.' },
           ],
           log: 'Two trips up and down the ladder. All fourteen end up by the door.',
@@ -179,7 +188,7 @@ export const BEATS = [
           value: 'recycled', label: 'Recycle the jugs', minutes: 15,
           lines: [
             { who: 'elena', text: 'The truck comes Friday morning.' },
-            { who: 'marcus', text: 'Then they will be gone by nine.' },
+            { who: 'jess', text: 'Then they will be gone by nine.' },
           ],
           log: 'Two trips to the curb, and the garage floor is bare.',
         },
@@ -195,10 +204,11 @@ export const BEATS = [
       { who: 'marcus', text: 'We are half out. The list on the fridge has most of it crossed off.' },
       { who: 'elena', text: 'I am not going until Saturday.' },
       { who: 'marcus', text: 'Then we will eat pasta.' },
+      { who: 'elena', text: 'I am calling my sister instead.' },
     ],
-    log: 'She does not answer. The crossed-off lines on the list have prices next to them.',
+    log: 'She writes on the list. The crossed-off lines have prices next to them.',
     teach: 'Click the pantry to see what is left in it.',
-    do: { type: 'use', who: 'marcus', target: 'pantry' },
+    do: { type: 'use', who: 'elena', target: 'pantry' },
     sets: ['checkedPantry'],
   },
 
@@ -244,6 +254,7 @@ export const BEATS = [
       { who: 'marcus', text: 'I thought you did.' },
       { who: 'elena', text: 'Well. I thought you did.' },
       { who: 'theo', text: 'I am fine. It only happens when I run.' },
+      { who: 'elena', text: 'My blood pressure pills are down to nine days.' },
     ],
     log: 'The blue one in the kitchen drawer gives about one more puff. The other one is in the Camry, in the glove box.',
     teach: 'Click the inhaler, then choose who gives it to him.',
@@ -253,32 +264,20 @@ export const BEATS = [
 
   {
     id: 'p10', day: 0, at: 9 * 60 + 30,
-    covers: ['p11', 'p11', 'p10'],
-    then: { type: 'trip', who: ['marcus', 'elena'], target: 'store', minutes: 35, label: 'Marcus and Elena drive to Fry’s and the pharmacy' },
-    objectives: ['Get the groceries', 'Pick up the pharmacy order', 'Get home before the heat'],
-    lines: [
-      { who: 'jess', text: 'I am not his babysitter.' },
-      { who: 'marcus', text: 'You are for two hours.' },
-      { who: 'jess', text: 'Two hours is a lot of hours.' },
-      { who: 'elena', text: 'He knows where the freezer is.' },
-    ],
-    log: 'They go together in the Camry. The cooler sits between them on the way back.',
-    teach: 'Put both parents on the cart and choose "help together".',
-    do: { type: 'together', target: 'store' },
-    sets: ['shoppedTogether'],
-  },
-
-  {
-    id: 'p11', day: 0, at: 10 * 60 + 15,
+    covers: ['p10', 'p10', 'p10'],
     activeObjective: 1,
-    objectives: ['Pay for the groceries', 'Put one thing back on the belt', 'Get the car started'],
+    objectives: ['Get the groceries', 'Put one thing back on the belt', 'Get home before the heat'],
     lines: [
+      { who: 'jess', text: 'So I am in charge of the house.' },
+      { who: 'marcus', text: 'Until we get back.' },
+      { who: 'jess', text: 'That is a lot of hours.' },
       { who: 'marcus', text: 'It was declined.' },
       { who: 'elena', text: 'Try it again.' },
       { who: 'marcus', text: 'It went through.' },
       { who: 'elena', text: 'Then one thing goes back.' },
     ],
-    log: 'Elena looks at the screen on the card reader, not at him.',
+    log: 'Fry\'s is a hundred and eleven degrees inside. They go through it fast and the cooler sits between them on the way back.',
+    teach: 'One thing has to go back on the belt. Choose below.',
     do: {
       type: 'choice', flag: 'cart', target: 'store', who: ['marcus', 'elena'],
       prompt: 'One thing has to go back on the belt. The pharmacy order is forty-five dollars.',
@@ -286,8 +285,8 @@ export const BEATS = [
         {
           value: 'water', label: 'Put back the case of water',
           lines: [
-            { who: 'marcus', text: 'The case of water goes back.' },
-            { who: 'elena', text: 'Sure.' },
+            { who: 'elena', text: 'The case of water goes back.' },
+            { who: 'marcus', text: 'Sure.' },
           ],
           log: 'The case of water goes back on the belt. Elena does not say anything else about it.',
         },
@@ -309,7 +308,22 @@ export const BEATS = [
         },
       ],
     },
-    sets: ['cardDeclined'],
+    then: { type: 'trip', who: ['marcus', 'elena'], target: 'store', minutes: 35, label: 'Marcus and Elena drive home with the groceries' },
+    sets: ['cardDeclined', 'shoppedTogether'],
+  },
+
+  {
+    id: 'p11', day: 0, at: 10 * 60 + 15,
+    objectives: ['Get the groceries in', 'Get the cold ones in the freezer', 'Take the trash out'],
+    lines: [
+      { who: 'elena', text: 'Jess, help me with the bags.' },
+      { who: 'jess', text: 'Give me the cold ones first.' },
+      { who: 'marcus', text: 'Cold ones first.' },
+    ],
+    log: 'Jess takes the cold ones straight to the freezer. The rest goes on the counter.',
+    teach: 'Click Jess, then choose "Use Front door".',
+    do: { type: 'use', who: 'jess', target: 'front-door' },
+    sets: ['groceriesIn'],
   },
 
   {
@@ -320,10 +334,13 @@ export const BEATS = [
       { who: 'theo', text: 'This is the best day of my life.' },
       { who: 'jess', text: 'It has been the best day of your life since Tuesday.' },
       { who: 'marcus', text: 'Both of you. Inside in ten minutes.' },
+      { who: 'jess', text: 'Mara says there are kids down at the canal.' },
+      { who: 'theo', text: 'Can I come?' },
+      { who: 'jess', text: 'No.' },
     ],
     log: 'Over the wall, the Okafor pool has four people in it and no shade over it.',
-    teach: 'Click the sprinkler to join them. You can let it run without you.',
-    do: { type: 'use', who: 'marcus', target: 'sprinkler' },
+    teach: 'Click Jess, then the sprinkler. You can let it run without you.',
+    do: { type: 'use', who: 'jess', target: 'sprinkler' },
     optional: true,
     timeout: 30,
     sets: ['okaforPoolSeen'],
@@ -395,7 +412,7 @@ export const BEATS = [
     ],
     log: 'Nobody finishes a sentence. Jess watches the two of them over the top of the table and does not say anything.',
     teach: 'Click the table to sit everybody down.',
-    do: { type: 'use', who: 'marcus', target: 'dinner-table' },
+    do: { type: 'use', who: 'elena', target: 'dinner-table' },
     sets: ['satDownTogether'],
   },
 
@@ -410,7 +427,7 @@ export const BEATS = [
     ],
     log: 'Green over the whole street, and half the neighbours filming it from the middle of the road. Theo rides on Marcus\'s shoulders and Elena stands beside him. For about a minute none of them says anything.',
     teach: 'You can walk out into the street and watch it.',
-    do: { type: 'walk', who: 'marcus', target: 'street' },
+    do: { type: 'walk', who: 'elena', target: 'street' },
     optional: true,
     timeout: 30,
     sets: ['sawAurora'],

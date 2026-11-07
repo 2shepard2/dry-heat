@@ -11,6 +11,7 @@ export class UI {
     this.logLines = [];
     this.tags = new Map();
     this.dirty = true;
+    $('#log').onclick = (e) => { if (e.target.closest('button')) { this.logExpanded = !this.logExpanded; this.renderLog(); } };
     $('#speed').addEventListener('click', (e) => {
       const b = e.target.closest('button');
       if (b) game.setSpeed(Number(b.dataset.s));
@@ -21,7 +22,8 @@ export class UI {
       const c = e.target.closest('.card');
       if (!c) return;
       const m = game.family.find((x) => x.id === c.dataset.id);
-      if (m.ai) { game.memberMenu(m, e.clientX + 12, e.clientY); return; }
+      game.detailMember = m;
+      if (m.ai) { this.refresh(); return; }
       if (game.selected.length === 1 && game.selected[0] === m && !e.shiftKey) game.focusOn(m);
       else game.selectById(c.dataset.id, e.shiftKey);
       this.refresh();
@@ -40,8 +42,12 @@ export class UI {
   log(text, kind = '') {
     this.logLines.push({ t: this.g.sim.clock(), d: this.g.sim.day, text, kind });
     if (this.logLines.length > 60) this.logLines.shift();
+    this.renderLog();
+  }
+
+  renderLog() {
     const el = $('#log');
-    el.innerHTML = this.logLines.slice(-9).map((l) => `<div class="${l.kind}"><span>${l.t}</span> ${esc(l.text)}</div>`).join('');
+    el.innerHTML = `<button aria-expanded="${!!this.logExpanded}">${this.logExpanded ? 'Collapse log' : 'Expand log'}</button>` + this.logLines.slice(this.logExpanded ? -20 : -2).map((l) => `<div class="${l.kind}"><span>${l.t}</span> ${esc(l.text)}</div>`).join('');
   }
 
   // ---- context menu
@@ -88,20 +94,14 @@ export class UI {
       `<div class="${o.done ? 'done' : o.failed ? 'failed' : o.prologue && !o.current ? 'later' : 'current'}">${o.done ? '☑ ' : o.failed ? '☒ ' : o.prologue && !o.current ? '' : '☐ '}${esc(o.text)}</div>`).join('') + '</div>' +
       (guide ? `<button class="now" title="Center the camera and select the family member"><b>Now:</b> ${esc(guide.text)}${guide.target ? ' <span>Show me ↗</span>' : ''}</button>` : ''));
 
-    // family cards
+    // Compact chips keep all five needs visible without occupying a column.
     set($('#family'), g.family.map((m) => {
-      const [st, sk] = m.status();
-      const sel = g.selected.includes(m);
-      const bar = (k, v) => `<div class="bar ${v < 25 ? 'bad' : v < 50 ? 'warn' : ''}"><i style="width:${v}%"></i><label>${k}</label></div>`;
       const n = m.needs;
-      const pr = m.progress();
-      return `<div class="card ${sel ? 'sel' : ''} ${m.dead ? 'deadc' : ''}" data-id="${m.id}">
-        <div class="nm">${sel ? '<span class="sel-mark">▶ </span>' : ''}<b>${m.name}</b> <span>${m.role}, ${m.age} · ${m.mass} kg</span></div>
-        <div class="st ${sk}">${st}${m.isWatching() && st !== 'Keeping watch' ? ' · Keeping watch' : ''} · core ${m.bodyT.toFixed(1)}°F <span class="felt">feels ${Math.round(m.felt)}°${m.wetMin > 0 ? ' · wet' : ''}</span></div>
-        <div class="equipment">Worn: ${esc(m.worn ? ITEMS[m.worn.id].name : 'nothing')}${g.lights.some((l) => l.owner === m && l.entry.id === 'flashlight') ? ' · holding flashlight' : ''}${g.isDark(m) ? ' · dark: slower work' : ''}</div>
-        ${bar(`Water −${m.deficit.toFixed(1)} L`, n.hydration)}${bar('Food', n.food)}${bar('Rest', n.energy)}${bar('Health', n.health)}${bar('Spirit', n.morale)}
-        <div class="do">${esc(m.doing() || 'Idle')}${pr !== null ? ` <em>${Math.round(pr * 100)}%</em>` : ''}</div>
-      </div>`;
+      const glyphs = [['hydration', '◆', 'Water'], ['food', '◒', 'Food'], ['energy', '☾', 'Rest'], ['health', '♥', 'Health'], ['morale', '✦', 'Spirit']];
+      return `<button class="card ${g.selected.includes(m) || g.detailMember === m ? 'sel' : ''} ${m.dead ? 'deadc' : ''}" data-id="${m.id}" title="${esc(m.name + ': ' + m.doing())}">
+        <span class="portrait" style="--person:#${m.def.color.toString(16)}">${m.name[0]}</span><b>${m.name}</b>
+        <span class="glyphs">${glyphs.map(([key, symbol, label]) => `<span class="glyph ${n[key] < 25 ? 'critical' : ''}" style="--fill:${n[key]}%;--need:${n[key] < 25 ? '#ee745d' : n[key] < 50 ? '#e7b653' : '#9acbaf'}" title="${label}: ${Math.round(n[key])}%" aria-label="${label}: ${Math.round(n[key])}%">${symbol}</span>`).join('')}</span>
+      </button>`;
     }).join(''));
 
     this.renderSide();
@@ -109,14 +109,20 @@ export class UI {
 
   renderSide() {
     const g = this.g, sim = g.sim;
-    const m = g.selected[0];
+    const m = g.detailMember || g.selected[0];
     const inv = $('#inv'), cont = $('#cont');
-    if (!m) { set(inv, '<div class="hint">Click a family member to see what they carry.</div>'); set(cont, ''); return; }
+    $('#side').classList.toggle('hidden', !m);
+    if (!m) { set(inv, ''); set(cont, ''); return; }
     const kg = m.kg();
-    set(inv, `<h3>${m.name} carries <span class="${kg > m.cap * 0.9 ? 'warn' : ''}">${kg.toFixed(1)} / ${m.cap} kg</span></h3>` +
+    const [status, kind] = m.status();
+    const bars = [['Water', m.needs.hydration], ['Food', m.needs.food], ['Rest', m.needs.energy], ['Health', m.needs.health], ['Spirit', m.needs.morale]].map(([label, value]) => `<div class="bar ${value < 25 ? 'bad' : value < 50 ? 'warn' : ''}"><i style="width:${value}%"></i><label>${label} ${Math.round(value)}%</label></div>`).join('');
+    set(inv, `<button class="close-detail" aria-label="Close person panel">×</button><h3>${m.name} · ${m.role}, ${m.age}</h3><div class="${kind}">${status} · core ${m.bodyT.toFixed(1)}°F</div>${m.worn ? `<div class="equipment">Worn: ${esc(ITEMS[m.worn.id].name)}</div>` : ''}${bars}<p class="activity">${esc(m.name + ': ' + m.doing())}</p><button class="autonomy-control">${m.autonomy ? 'Wait for me' : 'Let them be'}</button>${m.ai ? '<button class="person-orders">Give an order</button>' : ''}<h3>${m.name} carries <span class="${kg > m.cap * 0.9 ? 'warn' : ''}">${kg.toFixed(1)} / ${m.cap} kg</span></h3>` +
       '<button class="equipment-control">Worn items / nearby lights</button>' +
       (m.inv.length ? m.inv.map((e, i) => this.itemRow(e, i, 'inv')).join('') : '<div class="hint">Nothing.</div>'));
     inv.onpointerdown = (ev) => {
+      if (ev.target.closest('.close-detail')) { g.selected = []; g.detailMember = null; this.refresh(); return; }
+      if (ev.target.closest('.autonomy-control')) { m.setAutonomy(!m.autonomy); this.refresh(); return; }
+      if (ev.target.closest('.person-orders')) { g.memberMenu(m, ev.clientX, ev.clientY); return; }
       if (ev.target.closest('.equipment-control')) { g.equipmentMenu(m, ev.clientX, ev.clientY); return; }
       const r = ev.target.closest('.item');
       if (r) g.itemMenu(m, Number(r.dataset.i), ev.clientX, ev.clientY);

@@ -118,3 +118,28 @@ button:disabled { opacity: 0.45; cursor: default; }
 #beat-choice button:hover { background: #3a332c; }
 #beat-choice button:focus-visible { outline: 2px solid var(--sel); outline-offset: 2px; }
 #objectives .todo-list { display: flex; flex-wrap: wrap; gap: 4px 14px; max-height: 100px; overflow-y: auto; width: 100%; }
+
+/* Wave 4: edge HUD; the central view stays open. */
+#top { top: 8px; left: 10px; right: 10px; padding: 5px 10px; }
+#clock { font-size: 13px; }
+#env { font-size: 11px; }
+#objectives { top: 76px; left: 10px; right: auto; width: min(610px, calc(100vw - 320px)); padding: 5px; }
+#objectives .todo-list { display: none; }
+#objectives .now { margin: 0; }
+#family { top: auto; bottom: 10px; left: 10px; width: auto; display: flex; gap: 5px; padding: 5px; overflow: visible; max-height: none; }
+.card { display: grid; grid-template-columns: 25px 1fr; gap: 2px 5px; width: 123px; margin: 0; padding: 5px; text-align: left; }
+.portrait { grid-row: span 2; width: 25px; height: 32px; border-radius: 45% 45% 5px 5px; background: var(--person); display: grid; place-items: center; font-size: 17px; color: #fff; }
+.card b { font-size: 11px; }
+.glyphs { display: flex; gap: 3px; }
+.glyph { font-size: 12px; line-height: 17px; width: 14px; text-align: center; color: var(--need); background: linear-gradient(to top, #ffffff30 var(--fill), #0004 var(--fill)); border-bottom: 2px solid var(--need); }
+.critical { animation: need-pulse 1s ease-in-out infinite alternate; }
+@keyframes need-pulse { to { background-color: #a33325; box-shadow: 0 0 6px #ee745d; } }
+@media (prefers-reduced-motion: reduce) { .critical { animation: none; outline: 1px solid #ee745d; } }
+#side { top: 76px; right: 10px; width: 258px; max-height: calc(100vh - 150px); }
+.close-detail { float: right; font-size: 16px; padding: 0 6px; }
+.activity { color: #f3d7a1; font-size: 12px; margin: 7px 0; }
+#side .bar { height: 13px; }
+#log { bottom: 77px; left: 10px; width: 510px; max-height: 230px; overflow-y: auto; font-size: 11px; }
+#log button { float: right; padding: 1px 5px; font-size: 10px; }
+#help { bottom: 10px; right: 10px; max-width: 360px; }
+#help summary { cursor: pointer; }

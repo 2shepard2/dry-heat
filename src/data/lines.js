@@ -119,7 +119,7 @@ export const LINES = {
   ],
   'walt.greet.stranger': [
     { text: 'I know your face. I do not know your name, and I am not going to guess it in this heat.', needs: { flag: { walt: 'wavedOff' } } },
-    { text: 'The man across the street told me I was fine and went inside. I have been thinking about that all week.', needs: { flag: { walt: 'wavedOff' } } },
+    { text: 'Somebody across the street told me I was fine and went inside. I have been thinking about that all week.', needs: { flag: { walt: 'wavedOff' } } },
     { text: 'You are the family with the panels. I have not met you and I have not needed anything, and if you do need something, you will find me out front in the morning.', needs: { flag: { walt: 'wavedOff' } } },
     'Walt. Walter Dezavant, if you are writing it down, thirty-one years on this street.',
     'If you are here about the power, come early. After ten I am not much company.',

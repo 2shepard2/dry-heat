@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { findPath, nearbyWalkable } from './path.js';
-import { makeEntry, invKg, entryKg, ITEMS } from './inventory.js';
+import { makeEntry, invKg, entryKg, ITEMS, PER_L, isSpoiled } from './inventory.js';
 
 // walk: meters per real second at 1x. Space is compressed: crossing the block costs game minutes.
 // deficit: liters of body water already lost at the start (a hot night with the AC off at the end).
@@ -52,6 +52,8 @@ export class Member {
     this.ai = this.child || this.teen;
     this.mode = this.child ? { type: 'follow', who: 'elena' } : this.teen ? { type: 'stay' } : null;
     this.thinkT = 0;
+    this.autonomy = true;
+    this.autoDrinkAt = -Infinity;
     this.syncHydration();
 
     // body
@@ -207,7 +209,7 @@ export class Member {
 
   // Kids' own little brain, a couple of times a game minute.
   think(dtMin) {
-    if (!this.ai || !this.canAct()) return;
+    if (!this.ai || !this.canAct() || !this.autonomy) return;
     this.thinkT -= dtMin;
     if (this.thinkT > 0) return;
     this.thinkT = 0.5;
@@ -237,6 +239,91 @@ export class Member {
     }
   }
 
+  // Household care has its own task type: it cannot call beat/system completion.
+  setAutonomy(enabled) {
+    this.autonomy = enabled;
+    if (!enabled && (this.task?.autonomous || this.goal?.autonomous)) this.stopTask(true);
+  }
+
+  liveOwnLife(dtMin) {
+    const g = this.game, sim = g.sim, map = g.map;
+    if (!this.autonomy || !this.canAct() || this.away || this.flags.wandered || this.watching) return;
+    // Preserve children's explicit following/helping and their existing little brain.
+    if (this.ai && (this.mode?.type === 'follow' || this.task?.type === 'assist')) return;
+    const work = this.task || this.goal;
+    if (work && !work.autonomous || !work && this.path.length) return;
+    const home = map.lots.indexOf(map.home);
+    if (map.houseOf(...this.cell()) !== home || !map.isIndoor(...this.cell())) return;
+    this.lifeT = (this.lifeT || 0) - dtMin;
+    if (this.lifeT > 0) return;
+    this.lifeT = 1;
+    const thirsty = this.needs.hydration < 85 && sim.min - this.autoDrinkAt >= 20;
+    if (work && !(work.type === 'routine' && (thirsty || this.needs.food < 35 || this.needs.energy < 20))) return;
+    if (work) this.stopTask(true);
+    const stock = [{ inv: this.inv, obj: null }, ...map.objects.filter((o) => o.home && o.searched && map.isIndoor(o.x, o.y)).map((o) => ({ inv: o.items, obj: o }))];
+    const find = (predicate) => {
+      for (const source of stock) {
+        const entry = source.inv.find((e) => e.n > 0 && !isSpoiled(e, sim) && predicate(e, ITEMS[e.id]));
+        if (entry) return { ...source, entry };
+      }
+    };
+    const start = (obj, extra) => {
+      const goal = { type: 'routine', autonomous: true, duration: 15, ...extra };
+      if (obj) return this.useObject(obj, 'routine', goal);
+      this.goal = goal; this.startTask(); return true;
+    };
+    if (thirsty) {
+      const source = find((e, it) => it.cat === 'water' && (e.left !== undefined ? PER_L[e.id]?.hydration >= 35 && e.left >= .05 : it.use?.hydration >= 8));
+      if (source) { start(source.obj, { care: 'drink', source, label: 'getting a drink', duration: 2 }); return; }
+      if (sim.pressure() > .05) { start(map.objects.find((o) => o.home && o.ch === 'Z'), { care: 'tap', label: 'getting a drink', duration: 2 }); return; }
+      if (sim.tubL > .05) { start(map.tub, { care: 'tub', label: 'getting a drink', duration: 2 }); return; }
+    }
+    const dinner = sim.hour >= 18 && sim.hour < 20;
+    if (this.needs.food < (dinner ? 65 : 35)) {
+      const source = find((e, it) => it.cat === 'food' && it.use?.food > 0 && !(it.tags || []).some((t) => ['needsCooking', 'needsOpener', 'needsWater'].includes(t)));
+      if (source) { start(source.obj, { care: 'eat', source, label: dinner ? 'having dinner' : 'having a snack', duration: 5 }); return; }
+    }
+    if (this.needs.energy < 25 || (sim.hour >= (this.child ? 20 : 22) || sim.hour < 6) && this.needs.energy < 95) {
+      const bed = g.freeBed(this);
+      if (bed) { this.useObject(bed, 'sleep', { autonomous: true }); return; }
+      start(null, { label: 'resting', care: 'rest', duration: 30 }); return;
+    }
+    if (this.bodyT >= 100.5) {
+      start(map.objects.find((o) => o.home && o.ch === 'L'), { label: 'cooling off in the living room', care: 'rest', duration: 20 }); return;
+    }
+    const routines = this.id === 'elena'
+      ? sim.power && sim.hour < 17 ? ['working on her laptop', 'R'] : ['folding laundry', 'C']
+      : this.teen ? sim.power ? ['on her phone', 'R'] : ['spending time in her room', 'R']
+      : this.child ? ['playing', 'L'] : ['reading on the couch', 'L'];
+    const obj = map.objects.find((o) => o.home && o.ch === routines[1]);
+    start(obj, { label: routines[0], duration: 25 });
+  }
+
+  finishRoutine(t) {
+    const sim = this.game.sim;
+    const sip = Math.min(.35, this.deficit);
+    if (['tap', 'tub', 'drink'].includes(t.care)) {
+      // Recheck at completion: overlapping routines never overdraw shared stock.
+      if (this.needs.hydration >= 85 || sim.min - this.autoDrinkAt < 20) return;
+      let liters = 0;
+      if (t.care === 'tap' && sim.pressure() > .05) liters = sip;
+      if (t.care === 'tub') { liters = Math.min(sip, sim.tubL); sim.tubL -= liters; }
+      if (t.care === 'drink') {
+        const { inv, entry } = t.source, it = ITEMS[entry.id];
+        if (!inv.includes(entry) || isSpoiled(entry, sim)) return;
+        if (entry.left !== undefined) { liters = Math.min(sip, entry.left); entry.left -= liters; }
+        else if (entry.n > 0) { liters = Math.min(this.deficit, it.use.hydration / 35); entry.n--; }
+        if (entry.n <= 0) inv.splice(inv.indexOf(entry), 1);
+      }
+      if (liters > 0) { this.drink(liters); this.autoDrinkAt = sim.min; this.game.log(`${this.name} gets a drink (${liters.toFixed(2)} L, on ${this.his} own).`); }
+    } else if (t.care === 'eat') {
+      const { inv, entry } = t.source;
+      if (!inv.includes(entry) || entry.n <= 0 || isSpoiled(entry, sim)) return;
+      this.needs.food = clamp(this.needs.food + ITEMS[entry.id].use.food);
+      if (--entry.n <= 0) inv.splice(inv.indexOf(entry), 1);
+    } else if (t.care === 'rest') this.needs.energy = clamp(this.needs.energy + 5);
+  }
+
   stayNear(p, r) {
     if (p.dead) { this.task = null; return; }
     if (this.pos.distanceTo(p.pos) <= r) { this.path = []; return; }
@@ -256,7 +343,7 @@ export class Member {
     for (const [x, y] of cells) {
       if (x === cx && y === cy) { best = { p: [] }; break; }
       const p = findPath(map, cx, cy, x, y);
-      if (p && (!best || p.length < best.p.length)) best = { p };
+      if (p && (!goal.autonomous || p.every(([a, b]) => map.isIndoor(a, b) && map.houseOf(a, b) === map.lots.indexOf(map.home))) && (!best || p.length < best.p.length)) best = { p };
     }
     if (!best) { this.game.log(`${this.name} can't get to ${what}.`, 'warn'); return false; }
     this.stopTask(true);
@@ -294,7 +381,7 @@ export class Member {
     const dur = {
       search: (o?.home ? 4 : o?.car ? 6 : 8) * slow,
       open: 0.3, drinkTap: 3, drinkTub: 2, fillCont: 4, soak: 5, douse: 3, fillTub: Infinity, sleep: Infinity, drag: Infinity,
-      sit: Infinity, leisure: 2, job: g.job?.dur ?? 15, system: g.duration ?? 3, prologue: g.duration ?? 1,
+      routine: g.duration ?? 15, sit: Infinity, leisure: 2, job: g.job?.dur ?? 15, system: g.duration ?? 3, prologue: g.duration ?? 1,
     }[g.type] ?? 1;
     if (g.type === 'fillTub') {
       const other = this.game.family.find((m) => m !== this && m.task?.type === 'fillTub');
@@ -441,6 +528,7 @@ export class Member {
     if (this.ai) this.think(dtMin);
     else if (this.task?.type === 'assist' && this.canAct()) { this.assistT = (this.assistT || 0) - dtMin; if (this.assistT <= 0) { this.assistT = 0.5; this.stayNear(this.task.lead, 1.6); } }
     if (this.task?.type === 'assist' && (!this.task.lead.task && !this.task.lead.goal || this.task.lead.dead)) this.task = null;
+    this.liveOwnLife(dtMin);
     this.updateTask(dtMin);
     this.updateBody(dtMin);
     this.guardProgress(dtMin);
@@ -531,6 +619,7 @@ export class Member {
     this.task = null;
     const o = t.obj;
     switch (t.type) {
+      case 'routine': this.finishRoutine(t); break;
       case 'prologue': g.beats.notify(t.beatType, this.id, t.target); break;
       case 'system': g.systems.complete(t.action, this, t.data); break;
       case 'openCan': {
@@ -725,6 +814,8 @@ export class Member {
     if (this.collapsed) return 'Unconscious';
     if (this.isWatching()) return 'Keeping watch';
     if (this.flags.wandered) return 'In the back yard: needs fetching';
+    if (t?.autonomous) return `${t.label || (this.asleep ? 'sleeping' : 'taking care of things')} (on ${this.his} own)`;
+    if (this.goal?.autonomous) return `Going to ${this.goal.label || 'rest'} (on ${this.his} own)`;
     if (t) {
       const o = t.obj ? t.obj.name.toLowerCase() : '';
       return {

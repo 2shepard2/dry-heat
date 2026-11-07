@@ -79,7 +79,7 @@ export class Prologue {
     if (this.lines.length && this.lineDelay <= 1e-8) {
       const l = this.lines.shift();
       const name = this.g.family.find((m) => m.id === l.who)?.name || ({ walt: 'Walt', pruitt: 'Mr. Pruitt', okafor: 'Okafor', radio: 'Radio' }[l.who] || l.who);
-      this.g.log(`${name}: "${l.text}"`); this.lineDelay = 2.5;
+      this.g.log(`${name}: "${l.text}"`); this.lineDelay = this.pending ? 0.9 : 2.5;
     }
   }
   update(dtMin, dtReal) {
@@ -89,6 +89,8 @@ export class Prologue {
       if (this.g.sim.min < beatMinute(this.current)) return;
       this.begin(this.current, true);
     }
+    // Once the step is done, the rest of the conversation hurries so the beat doesn't hang on a stale prompt.
+    if (this.pending) this.lineDelay = Math.min(this.lineDelay, 0.9);
     this.speak(dtReal); this.showChoice();
     const b = this.current, d = b.do || { type: 'wait', minutes: 0 };
     this.elapsed += dtMin;
@@ -97,7 +99,7 @@ export class Prologue {
     if (d.type === 'wait' && this.elapsed >= (d.minutes || 0)) this.pending = true;
     if (d.type === 'walk') {
       const o = this.targets[d.target];
-      if (this.g.family.some((m) => (!d.who || m.id === d.who) && !m.away && Math.hypot(m.pos.x - o.x - 0.5, m.pos.z - o.y - 0.5) < 2)) this.pending = true;
+      if (this.g.family.some((m) => (!d.who || m.id === d.who) && !m.task?.autonomous && !m.goal?.autonomous && !m.away && Math.hypot(m.pos.x - o.x - 0.5, m.pos.z - o.y - 0.5) < 2)) this.pending = true;
     }
     if (this.pending && b.then && !this.thenStarted) {
       this.thenStarted = true; this.pending = false; this.queueTrip(b.then);
@@ -172,6 +174,7 @@ export class Prologue {
     if (d.type === 'sleep') target = this.targets.beds;
     if (d.type === 'together' || d.type === 'trip') target = this.targets.car;
     if (this.waiting) text = `Free time until ${this.clockAt(b.at)} — next: ${text}`;
+    if (this.pending && !this.trip && !this.boarding) { target = null; text = 'Done. Listening in…'; }
     if (this.boarding) { target = this.targets.car; text = 'Getting in the car — the family will drive away together'; }
     if (this.trip) { target = null; text = `${this.trip.label} — back around ${this.clockAt(this.trip.until)}; wait for them to return`; }
     return { text, target, crew };
