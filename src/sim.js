@@ -5,7 +5,7 @@ export class Sim {
   constructor({ phase = 'outage' } = {}) {
     this.phase = phase;
     this.min = phase === 'prologue' ? -2880 + 435 : 6 * 60;      // Thursday 7:15 AM, or the legacy outage fixture
-    this.speed = phase === 'prologue' ? 4 : 1;          // game minutes per real second
+    this.speed = 1;          // game minutes per real second
     this.shadedWindows = 0;
     this.indoor = phase === 'prologue' ? 78 : 79;        // the AC was running until 5:40
     this.tubL = 0;

@@ -50,10 +50,11 @@ export class Member {
     this.refusedAt = -1e9;
     // the kids are not yours to steer: they follow, wait, and look after themselves (badly)
     this.ai = this.child || this.teen;
-    this.mode = this.child ? { type: 'follow', who: 'elena' } : this.teen ? { type: 'stay' } : null;
+    this.mode = this.child ? { type: 'follow', who: 'elena', routine: true } : this.teen ? { type: 'stay' } : null;
     this.thinkT = 0;
     this.autonomy = true;
     this.autoDrinkAt = -Infinity;
+    this.freeAt = -Infinity;
     this.syncHydration();
 
     // body
@@ -138,7 +139,24 @@ export class Member {
     return this.approach(cells, { type: 'watch' }, 'home to keep watch');
   }
 
+  urgentNeed() { return this.needs.hydration < 60 || this.needs.food < 25 || this.needs.energy < 15; }
+  orderFinished(work) {
+    if (work && !work.autonomous) this.freeAt = this.game.sim.min + 45;
+  }
+  get waitingForAutonomy() { return this.game.sim.min < this.freeAt && !this.urgentNeed(); }
+
+  // Reserve current cells and destinations, including people still walking there.
+  occupiedCells() {
+    const map = this.game.map, occupied = new Set();
+    for (const m of this.game.family) if (m !== this && !m.away && !m.dead) {
+      occupied.add(map.idx(...m.cell()));
+      if (m.path.length) occupied.add(map.idx(...m.path.at(-1)));
+    }
+    return occupied;
+  }
+
   stopTask(quiet = false) {
+    this.orderFinished(this.task || this.goal);
     if (this.task?.type === 'carAC') {
       const car = this.game.systems.car;
       const cell = this.game.map.useCells(car)[0];
@@ -154,17 +172,27 @@ export class Member {
     this.goal = null;
     this.path = [];
     this.stall = null;
+    this.walkOrder = false;
   }
 
   moveTo(x, y, goal = null) {
     if (this.task?.type === 'carAC') this.stopTask(true);
     if (!this.canAct() || this.away) return false;
     const [cx, cy] = this.cell();
+    const occupied = this.occupiedCells();
+    if (occupied.has(this.game.map.idx(x, y))) {
+      const spot = nearbyWalkable(this.game.map, x, y, 1, occupied)[0];
+      if (!spot) return false;
+      [x, y] = spot;
+    }
     const p = findPath(this.game.map, cx, cy, x, y);
     if (!p) return false;
     this.stopTask(true);
     this.path = p;
+    this.autonomousLocation = false;
     this.goal = goal;
+    if (!goal) this.walkOrder = true;
+    if (!p.length && !goal) { this.freeAt = this.game.sim.min + 45; this.walkOrder = false; }
     if (!p.length && goal) this.startTask();
     return true;
   }
@@ -197,8 +225,8 @@ export class Member {
     }
     if (!this.willObey()) return;
     this.stopTask(true);
-    if (type === 'follow') { this.mode = { type: 'follow', who: from.id }; g.log(`${this.name} sticks close to ${from.name}.`); }
-    else if (type === 'stay') { this.mode = { type: 'stay' }; g.log(`${this.name} stays put.`); }
+    if (type === 'follow') { this.freeAt = -Infinity; this.mode = { type: 'follow', who: from.id }; g.log(`${this.name} sticks close to ${from.name}.`); }
+    else if (type === 'stay') { this.freeAt = g.sim.min + 45; this.mode = { type: 'stay' }; g.log(`${this.name} stays put.`); }
     else if (type === 'help') { this.task = { type: 'assist', lead: from, t: 0, dur: Infinity }; g.log(`${this.name} goes to help ${from.name}.`); }
     else if (type === 'drink') this.useObject(g.map.tub, 'drinkTub');
     else if (type === 'rest') {
@@ -209,7 +237,8 @@ export class Member {
 
   // Kids' own little brain, a couple of times a game minute.
   think(dtMin) {
-    if (!this.ai || !this.canAct() || !this.autonomy) return;
+    if (!this.ai || !this.canAct() || !this.autonomy || this.waitingForAutonomy) return;
+    if (this.mode?.routine) return;
     this.thinkT -= dtMin;
     if (this.thinkT > 0) return;
     this.thinkT = 0.5;
@@ -249,11 +278,12 @@ export class Member {
     const g = this.game, sim = g.sim, map = g.map;
     if (!this.autonomy || !this.canAct() || this.away || this.flags.wandered || this.watching) return;
     // Preserve children's explicit following/helping and their existing little brain.
-    if (this.ai && (this.mode?.type === 'follow' || this.task?.type === 'assist')) return;
+    if (this.ai && (this.mode?.type === 'follow' && !this.mode.routine || this.task?.type === 'assist')) return;
+    if (this.waitingForAutonomy) return;
     const work = this.task || this.goal;
     if (work && !work.autonomous || !work && this.path.length) return;
     const home = map.lots.indexOf(map.home);
-    if (map.houseOf(...this.cell()) !== home || !map.isIndoor(...this.cell())) return;
+    if (map.lotAt[map.idx(...this.cell())] !== home) return;
     this.lifeT = (this.lifeT || 0) - dtMin;
     if (this.lifeT > 0) return;
     this.lifeT = 1;
@@ -291,12 +321,40 @@ export class Member {
     if (this.bodyT >= 100.5) {
       start(map.objects.find((o) => o.home && o.ch === 'L'), { label: 'cooling off in the living room', care: 'rest', duration: 20 }); return;
     }
-    const routines = this.id === 'elena'
-      ? sim.power && sim.hour < 17 ? ['working on her laptop', 'R'] : ['folding laundry', 'C']
-      : this.teen ? sim.power ? ['on her phone', 'R'] : ['spending time in her room', 'R']
-      : this.child ? ['playing', 'L'] : ['reading on the couch', 'L'];
-    const obj = map.objects.find((o) => o.home && o.ch === routines[1]);
-    start(obj, { label: routines[0], duration: 25 });
+    const spots = map.routineSpots ||= (() => {
+      const prop = (key, name, x, y) => ({ key, name, x, y, w: 1, h: 1, home: true });
+      const bed = (x, y) => map.objects.find((o) => o.home && o.ch === 'R' && o.x === x && o.y === y);
+      return { table: prop('routine-table', 'Kitchen table', 30, 11),
+        laundry: prop('routine-laundry', 'Laundry', 36, 11),
+        couch: map.objects.find((o) => o.home && o.ch === 'L'),
+        patio: prop('routine-patio', 'Patio', 32, 4),
+        living: prop('routine-living', 'Living room play spot', 31, 13),
+        // Jess's bed is boxed by furniture; stand in her bedroom's free aisle.
+        jess: Object.assign(bed(23, 13), { routineCells: [[25, 13], [25, 14]] }), theo: bed(24, 14) };
+    })();
+    const options = this.id === 'elena'
+      ? [[spots.table, sim.power ? 'working on her laptop' : 'sitting at the table'], [spots.laundry, 'folding laundry'], [spots.couch, 'relaxing on the couch']]
+      : this.teen ? [[spots.jess, sim.power ? 'on her phone' : 'spending time in her room'], [spots.couch, 'relaxing on the couch']]
+      : this.child ? [[spots.living, 'playing in the living room'], [spots.theo, 'playing in his room']]
+      : [[spots.couch, 'reading on the couch'], ...(sim.hour >= 18 && sim.hour < 21 ? [[spots.patio, 'sitting on the patio']] : [])];
+    // Rotate through personal spots; shared furniture can have only one routine owner.
+    const turn = this.routineTurn || 0;
+    this.routineTurn = turn + 1;
+    const duration = g.rng.int(30, 60);
+    const occupied = this.occupiedCells();
+    if (this.child && this.mode?.routine) {
+      const parent = g.family.find((m) => m.id === 'elena');
+      const [x, y] = parent?.cell() || [];
+      if (parent && !parent.away && map.isIndoor(x, y) && x >= 27 && x <= 33 && y >= 6 && y <= 14) {
+        const cells = [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]].filter(([a, b]) => map.walkable(a, b) && !occupied.has(map.idx(a, b)));
+        if (this.approach(cells, { type: 'routine', autonomous: true, label: 'playing near Elena', duration }, 'Elena')) return;
+      }
+    }
+    for (let i = 0; i < options.length; i++) {
+      const [obj, label] = options[(turn + i) % options.length];
+      if (!obj || g.family.some((m) => m !== this && (m.task || m.goal)?.obj === obj)) continue;
+      if (start(obj, { label, duration, outdoors: obj === spots.patio })) return;
+    }
   }
 
   finishRoutine(t) {
@@ -326,11 +384,10 @@ export class Member {
 
   stayNear(p, r) {
     if (p.dead) { this.task = null; return; }
-    if (this.pos.distanceTo(p.pos) <= r) { this.path = []; return; }
+    if (this.cell().join() !== p.cell().join() && this.pos.distanceTo(p.pos) <= r) { this.path = []; return; }
     const [px, py] = p.cell();
-    const avoid = new Set(this.game.family.filter((m) => m !== this).map((m) => m.cell()[1] * this.game.map.W + m.cell()[0]));
-    const spot = nearbyWalkable(this.game.map, px, py, 1, avoid)[0] || [px, py];
-    this.walkTo(spot[0], spot[1]);
+    const spot = nearbyWalkable(this.game.map, px, py, 1, this.occupiedCells())[0];
+    if (spot) this.walkTo(spot[0], spot[1]);
   }
 
   // Walk to the closest standing spot among `cells`, then start goal.
@@ -338,23 +395,27 @@ export class Member {
     if (this.task?.type === 'carAC') this.stopTask(true);
     if (!this.canAct() || this.away) return false;
     const map = this.game.map;
+    if (goal.autonomous && goal.obj && this.game.family.some((m) => m !== this && (m.task || m.goal)?.obj === goal.obj)) return false;
     const [cx, cy] = this.cell();
     let best = null;
+    const occupied = this.occupiedCells();
     for (const [x, y] of cells) {
+      if (occupied.has(map.idx(x, y))) continue;
       if (x === cx && y === cy) { best = { p: [] }; break; }
       const p = findPath(map, cx, cy, x, y);
-      if (p && (!goal.autonomous || p.every(([a, b]) => map.isIndoor(a, b) && map.houseOf(a, b) === map.lots.indexOf(map.home))) && (!best || p.length < best.p.length)) best = { p };
+      if (p && (!goal.autonomous || p.every(([a, b]) => (goal.outdoors || !map.isIndoor(cx, cy) || map.isIndoor(a, b)) && map.lotAt[map.idx(a, b)] === map.lots.indexOf(map.home))) && (!best || p.length < best.p.length)) best = { p };
     }
-    if (!best) { this.game.log(`${this.name} can't get to ${what}.`, 'warn'); return false; }
+    if (!best) { if (!goal.autonomous) this.game.log(`${this.name} can't get to ${what}.`, 'warn'); return false; }
     this.stopTask(true);
     this.path = best.p;
+    this.autonomousLocation = !!goal.autonomous;
     this.goal = goal;
     if (!best.p.length) this.startTask();
     return true;
   }
 
   useObject(obj, type, extra = {}) {
-    return this.approach(this.game.map.useCells(obj), { type, obj, ...extra }, `the ${obj.name.toLowerCase()}`);
+    return this.approach(type === 'routine' && obj.routineCells || this.game.map.useCells(obj), { type, obj, ...extra }, `the ${obj.name.toLowerCase()}`);
   }
 
   // Go to another person and do something to them (douse, drag).
@@ -375,6 +436,7 @@ export class Member {
       return;
     }
     const o = g.obj;
+    if (g.autonomous && this.occupiedCells().has(this.game.map.idx(...this.cell()))) { this.lifeT = 0; return; }
     if (o) this.faceTo(o.x + o.w / 2, o.y + o.h / 2);
     if (g.victim) this.faceTo(g.victim.pos.x, g.victim.pos.z);
     const slow = (this.child ? 1.5 : 1) * (this.bodyT >= EXHAUSTION_F ? 1.4 : 1);
@@ -513,6 +575,7 @@ export class Member {
       if (!this.path.length) {
         if (this.task?.type === 'drag') this.finishDrag();
         else if (this.goal) this.startTask();
+        else if (this.walkOrder) { this.freeAt = sim.min + 45; this.walkOrder = false; }
       }
     } else if (!this.asleep && !this.collapsed) {
       this.walkAnimRate = 1;
@@ -527,7 +590,7 @@ export class Member {
     if (dtMin <= 0) return;
     if (this.ai) this.think(dtMin);
     else if (this.task?.type === 'assist' && this.canAct()) { this.assistT = (this.assistT || 0) - dtMin; if (this.assistT <= 0) { this.assistT = 0.5; this.stayNear(this.task.lead, 1.6); } }
-    if (this.task?.type === 'assist' && (!this.task.lead.task && !this.task.lead.goal || this.task.lead.dead)) this.task = null;
+    if (this.task?.type === 'assist' && (!this.task.lead.task && !this.task.lead.goal || this.task.lead.dead)) { this.orderFinished(this.task); this.task = null; }
     this.liveOwnLife(dtMin);
     this.updateTask(dtMin);
     this.updateBody(dtMin);
@@ -550,6 +613,7 @@ export class Member {
   }
 
   finishDrag() {
+    this.orderFinished(this.task);
     const v = this.task.victim;
     const dest = this.task.dest;
     this.task = null;
@@ -592,7 +656,7 @@ export class Member {
         }
       } else { t.goneT = 0; t.warned = false; }
       if (!t.waiting) t.t += dtMin;
-      if (t.t >= t.dur) { this.task = null; g.jobDone(this, t.job); }
+      if (t.t >= t.dur) { this.task = null; g.jobDone(this, t.job); if (!this.task && !this.goal) this.orderFinished(t); }
       return;
     }
     if (t.type === 'prologue' && t.beatType === 'together' && !['marcus', 'elena'].every((id) => {
@@ -605,17 +669,18 @@ export class Member {
       const p = sim.pressure();
       if (p <= 0.001) {
         g.log(`The tap coughs air and stops. The water's gone. The tub holds ${Math.round(sim.tubL)} liters.`, 'warn');
-        this.task = null; return;
+        this.task = null; this.orderFinished(t); return;
       }
       sim.tubL = Math.min(sim.TUB_MAX, sim.tubL + 2.5 * p * dtMin);
-      if (sim.tubL >= sim.TUB_MAX) { g.log(`The tub is full: ${sim.TUB_MAX} liters.`, 'good'); this.task = null; }
+      if (sim.tubL >= sim.TUB_MAX) { g.log(`The tub is full: ${sim.TUB_MAX} liters.`, 'good'); this.task = null; this.orderFinished(t); }
       return;
     }
     if (t.type === 'sleep') {
-      if (this.needs.energy >= 98) { this.task = null; this.wake(); }
+      if (this.needs.energy >= 98) { this.task = null; this.wake(); this.orderFinished(t); }
       return;
     }
     if (t.t < t.dur) return;
+    this.orderFinished(t);
     this.task = null;
     const o = t.obj;
     switch (t.type) {
@@ -833,6 +898,7 @@ export class Member {
         job: t.waiting ? `${t.job?.label}: waiting for ${t.missing?.map((m) => m.name).join(', ') || 'everyone'}` : t.job?.label,
       }[t.type] || 'Idle';
     }
+    if (!this.path.length && this.waitingForAutonomy) return `Waiting (free in ${Math.ceil(this.freeAt - this.game.sim.min)} min)`;
     if (this.ai && this.mode?.type === 'follow') return `Following ${this.game.family.find((m) => m.id === this.mode.who)?.name}`;
     if (this.path.length) return this.goal?.type === 'watch' ? 'Going home to keep watch' : this.goal?.type === 'job' && this.goal.job.walkLabel || 'Walking';
     if (this.ai && this.mode?.type === 'stay') return 'Staying put';

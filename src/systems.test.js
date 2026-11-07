@@ -223,7 +223,7 @@ test('seed p1 completes through the real coffee use task; all targets are reacha
   const { g, b, m } = prologue();
   assert.equal(g.sim.day, -1); assert.equal(g.sim.clock(), '7:15 AM');
   assert.equal(g.sim.dateLabel(), 'Thursday, July 9');
-  assert.equal(g.sim.speed, 4); assert.equal(g.sim.power, true);
+  assert.equal(g.sim.speed, 1); assert.equal(g.sim.power, true);
   for (const [key, o] of Object.entries(b.targets)) {
     assert.ok(m.useObject(o, 'prologue', { target: key, beatType: 'use' }), key);
     m.stopTask(true);
@@ -330,7 +330,7 @@ test('prologue stays safe through a long wait; windows finish indoors, status ne
   b.outage(); give(m, 'aluminum_foil');
   assert.ok(g.shadeWindow(m, 'west-bedroom')); finish(m);
   assert.equal(g.map.isIndoor(...m.cell()), true); assert.equal(g.sim.shadedWindows, 1);
-  assert.equal(m.doing(), 'Idle');
+  assert.equal(m.doing(), 'Waiting (free in 45 min)');
 });
 
 
@@ -360,7 +360,7 @@ test('fresh no-jump playthrough: all 18 beats, real paths/trips, clock, decision
     const issued = new Set(), seenAway = new Set(), independentStalls = new Map();
     const completedObjectives = new Set();
     let campSeen = false, pickupSeen = false, fridayCampSeen = false;
-    while (g.sim.phase === 'prologue' && seconds < 1200) {
+    while (g.sim.phase === 'prologue' && seconds < 4000) {
       const beat = b.current, d = beat?.do;
       if (beat && !b.waiting && !issued.has(beat.id)) {
         if (d.type === 'choice') {
@@ -420,7 +420,7 @@ test('fresh no-jump playthrough: all 18 beats, real paths/trips, clock, decision
     assert.ok(messages.some((line) => line.includes('brings Theo home from camp')));
     assert.ok(completedObjectives.has('Finish the Hendricks deck'));
     assert.ok(g.family.every((member) => !member.away && member.obj.visible));
-    console.log(`No-jump playthrough at default 4x, ${picks.gas}: ${(seconds / 60).toFixed(2)} real minutes (immediate inputs; choice reading time extra)`);
+    console.log(`No-jump playthrough at default 1x, ${picks.gas}: ${(seconds / 60).toFixed(2)} real minutes (immediate inputs; choice reading time extra)`);
   }
 });
 
@@ -484,4 +484,171 @@ test('guidance follows kid orders; aurora bands project into the sky above the h
   assert.equal(beacon.position.x, g.family[3].pos.x);
   assert.equal(beacon.position.z, g.family[3].pos.z);
   assert.ok(beacon.children.every((c) => c.material.depthTest === false));
+});
+
+test('new games start at 1x in either phase', () => {
+  assert.equal(new Sim().speed, 1);
+  assert.equal(new Sim({ phase: 'prologue' }).speed, 1);
+});
+
+test('personal routines rotate in 30–60 minutes and reserve objects and idle cells', () => {
+  const { g, m, e } = prologue([{ id: 'quiet', day: -1, at: 435, do: { type: 'wait', minutes: 600 } }]);
+  const visited = new Map(g.family.map((m) => [m.id, new Set()]));
+  for (let i = 0; i < 600; i++) {
+    g.sim.step(.5);
+    for (const member of g.family) member.update(.5, .5);
+    const idle = g.family.filter((m) => !m.path.length);
+    assert.equal(new Set(idle.map((m) => m.cell().join())).size, idle.length);
+    const objects = g.family.map((m) => (m.task || m.goal)?.obj).filter(Boolean);
+    assert.equal(new Set(objects).size, objects.length);
+    for (const member of g.family) {
+      const work = member.task || member.goal;
+      if (work?.type === 'routine' && !work.care) {
+        assert.ok(work.duration >= 30 && work.duration <= 60);
+        if (work.obj) visited.get(member.id).add(work.obj);
+      }
+    }
+  }
+  assert.ok(visited.get('elena').size >= 2);
+  assert.ok(visited.get('jess').size >= 1);
+  assert.notEqual((m.task || m.goal)?.obj, (e.task || e.goal)?.obj);
+  assert.ok([...visited.get('jess')].every((o) => o.ch === 'L' || o.x === 23 && o.y === 13));
+});
+
+test('Theo plays beside Elena only in common rooms and never reserves her cell', () => {
+  const { g, e } = prologue();
+  const theo = g.family.find((m) => m.id === 'theo');
+  e.stopTask(); e.pos.set(30.5, 0, 10.5);
+  theo.liveOwnLife(1); arrive(theo);
+  assert.match(theo.task.label, /near Elena/);
+  assert.notDeepEqual(theo.cell(), e.cell());
+  assert.equal(Math.abs(theo.cell()[0] - e.cell()[0]) + Math.abs(theo.cell()[1] - e.cell()[1]), 1);
+  theo.stopTask(); e.pos.set(24.5, 0, 7.5);
+  theo.liveOwnLife(60);
+  assert.doesNotMatch((theo.task || theo.goal).label, /near Elena/);
+  // Explicit following also steps away if the two people start on one cell.
+  theo.stopTask(); theo.pos.copy(e.pos); theo.order('follow', e); theo.think(1);
+  assert.notDeepEqual(theo.path.at(-1), e.cell());
+});
+
+test('Marcus visits the patio at dusk and can return indoors', () => {
+  const { g, m } = prologue();
+  g.sim.min = -2880 + 18 * 60;
+  m.routineTurn = 1;
+  m.liveOwnLife(1); arrive(m);
+  assert.match(m.task.label, /patio/);
+  finish(m); m.liveOwnLife(60); arrive(m);
+  assert.match(m.task.label, /couch/);
+  assert.equal(g.map.isIndoor(...m.cell()), true);
+});
+
+test('a completed player order stays in place for 45 minutes, then autonomy resumes', () => {
+  const { g, m } = prologue();
+  m.liveOwnLife(1);
+  assert.equal((m.task || m.goal).autonomous, true);
+  assert.ok(m.useObject(g.map.objects.find((o) => o.home && o.ch === 'Z'), 'drinkTap'));
+  assert.equal((m.task || m.goal).autonomous, undefined);
+  finish(m);
+  const cell = m.cell(), doneAt = g.sim.min;
+  for (let minute = 1; minute < 45; minute++) {
+    g.sim.min = doneAt + minute; m.update(1, 1);
+    assert.equal(m.task, null); assert.equal(m.goal, null);
+    assert.deepEqual(m.cell(), cell);
+    assert.equal(m.doing(), `Waiting (free in ${45 - minute} min)`);
+  }
+  g.sim.min = doneAt + 45; m.liveOwnLife(1);
+  assert.equal((m.task || m.goal).autonomous, true);
+});
+
+test('each urgent need bypasses order grace', () => {
+  for (const [need, value] of [['hydration', 59], ['food', 24], ['energy', 14]]) {
+    const { g, m } = fixture();
+    m.useObject(g.map.objects.find((o) => o.home && o.ch === 'Z'), 'drinkTap'); finish(m);
+    m.needs[need] = value;
+    if (need === 'hydration') m.deficit = 3;
+    if (need === 'food') give(m, 'pull_tab_can');
+    m.liveOwnLife(1);
+    assert.equal(m.waitingForAutonomy, false);
+    assert.equal((m.task || m.goal)?.autonomous, true, need);
+    assert.equal((m.task || m.goal).care, { hydration: 'tap', food: 'eat', energy: 'rest' }[need]);
+  }
+});
+
+test('an idle thirsty adult drinks without player input', () => {
+  const { g, m } = fixture();
+  m.deficit = 2; m.syncHydration();
+  const before = m.needs.hydration;
+  m.liveOwnLife(1);
+  assert.ok(['tap', 'drink'].includes((m.task || m.goal).care));
+  finish(m);
+  assert.ok(m.needs.hydration > before);
+  assert.equal(m.autoDrinkAt, g.sim.min);
+});
+
+test('autonomy neither chooses nor completes use/walk beats, even after a routine ends', () => {
+  for (const type of ['use', 'walk', 'choice']) {
+    const { g, b, m } = prologue([{ id: 'manual', day: -1, at: 435,
+      do: type === 'choice' ? { type, flag: 'gas', options: [{ value: 'full', label: 'Fill up' }] } : { type, target: 'couch' } }]);
+    m.liveOwnLife(1); arrive(m); finish(m);
+    b.update(1, 3);
+    assert.equal(b.completed.size, 0, type);
+    assert.equal(b.pending, false, type);
+    assert.deepEqual(g.decisions, {});
+    assert.equal(g.flags.gas, undefined);
+  }
+});
+
+test('Skip ahead restores the prior speed when the desk task completes', () => {
+  for (const speed of [0, 1, 4]) {
+    const { g, b, m } = prologue([
+      { id: 'desk', day: -1, at: 435, do: { type: 'use', target: 'desk' } },
+      { id: 'next', day: -1, at: 720, lines: [{ who: 'elena', text: 'Lunch?' }], do: { type: 'use', target: 'pantry' } },
+    ]);
+    assert.equal(b.skipAhead(), false);
+    b.interact('desk', [m]); arrive(m); g.sim.speed = speed;
+    assert.equal(b.guidance().canSkip, true);
+    assert.equal(b.skipAhead(), true); assert.equal(g.sim.speed, 12);
+    for (let i = 0; i < 3000 && !b.completed.has('desk'); i++) {
+      const dt = g.sim.speed * .1;
+      g.sim.step(dt); m.updateTask(dt); b.update(dt, .1);
+    }
+    assert.ok(b.completed.has('desk'));
+    assert.equal(g.sim.speed, speed); assert.equal(b.hurry, null);
+  }
+});
+
+test('Skip ahead ends at free-time boundary, new dialogue, choice, or player work', () => {
+  const { g, b, m } = prologue([
+    { id: 'coffee', day: -1, at: 435, do: { type: 'use', target: 'coffee' } },
+    { id: 'later', day: -1, at: 500, lines: [{ who: 'elena', text: 'Ready?' }],
+      do: { type: 'choice', flag: 'gas', options: [{ value: 'full', label: 'Fill up' }] } },
+  ]);
+  b.interact('coffee'); finish(m); flushLines(b);
+  assert.match(b.guidance().text, /Free time until/);
+  assert.equal(b.skipAhead(), true);
+  m.useObject(b.targets.sink, 'drinkTap'); b.updateSkipping();
+  assert.equal(g.sim.speed, 1); assert.equal(b.hurry, null);
+  finish(m);
+  assert.equal(b.skipAhead(), true);
+  g.sim.min = beatMinute(b.current); b.update(1, .1);
+  assert.equal(g.sim.speed, 1); assert.equal(b.skipAhead(), false);
+  flushLines(b); assert.equal(b.choiceReady, true); assert.equal(b.skipAhead(), false);
+  assert.deepEqual(g.decisions, {});
+});
+
+
+test('manual arrivals reserve separate standing cells and walking receives order grace', () => {
+  const { g, m, e } = prologue();
+  const table = g.beats.targets['dinner-table'];
+  assert.ok(m.useObject(table, 'leisure'));
+  assert.ok(e.useObject(table, 'leisure'));
+  finish(m); finish(e);
+  assert.notDeepEqual(m.cell(), e.cell());
+  assert.equal(m.waitingForAutonomy, true);
+  assert.equal(e.waitingForAutonomy, true);
+  assert.ok(m.moveTo(29, 12));
+  for (let i = 0; i < 200 && m.path.length; i++) { g.sim.step(.1); m.update(.1, .1); }
+  assert.equal(m.path.length, 0);
+  assert.equal(m.freeAt, g.sim.min + 45);
+  assert.match(m.doing(), /Waiting/);
 });

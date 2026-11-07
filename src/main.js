@@ -117,7 +117,7 @@ const game = {
     const o = game.objectives.find((x) => x.id === id);
     if (o && !o.done && !o.failed) { o[state] = true; if (state === 'done') game.log(`Done: ${o.text}.`, 'good'); }
   },
-  setSpeed(s) { sim.speed = s; },
+  setSpeed(s) { game.beats?.stopSkipping(); sim.speed = s; if (s) game.lastSpeed = s; },
   selectById(id, add) {
     const m = game.family.find((x) => x.id === id);
     if (m) select(m, add);
@@ -814,11 +814,10 @@ addEventListener('keydown', (e) => {
   if (!started || game.cutting || game.beats.paused) return;
   keys.add(e.key.toLowerCase());
   const k = e.key.toLowerCase();
-  if (k === ' ') { e.preventDefault(); sim.speed = sim.speed ? 0 : (game.lastSpeed || 1); }
-  if (sim.speed) game.lastSpeed = sim.speed;
-  if (k === '1') sim.speed = 1;
-  if (k === '2') sim.speed = 4;
-  if (k === '3') sim.speed = 12;
+  if (k === ' ') { e.preventDefault(); game.setSpeed(sim.speed ? 0 : (game.lastSpeed || 1)); }
+  if (k === '1') game.setSpeed(1);
+  if (k === '2') game.setSpeed(4);
+  if (k === '3') game.setSpeed(12);
   if (k === 'q') cam.yawGoal += Math.PI / 2;
   if (k === 'e') cam.yawGoal -= Math.PI / 2;
   if (k === 'r') { roofsOff = !roofsOff; }
@@ -864,6 +863,7 @@ function frame(now) {
   placeCamera();
 
   if (started && !game.over) {
+    game.beats.updateSkipping();
     const dtMin = dtReal * (game.beats.paused || game.cutting ? 0 : sim.speed); // 1 real second = 1 game minute at 1x
     // sub-step the body sim at high speed so thresholds aren't skipped
     const steps = Math.max(1, Math.ceil(dtMin / 2));

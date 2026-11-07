@@ -16,7 +16,10 @@ export class UI {
       const b = e.target.closest('button');
       if (b) game.setSpeed(Number(b.dataset.s));
     });
-    $('#objectives').addEventListener('click', (e) => { if (e.target.closest('.now')) game.showBeatTarget?.(); });
+    $('#objectives').addEventListener('click', (e) => {
+      if (e.target.closest('.skip-ahead')) game.beats?.skipAhead();
+      else if (e.target.closest('.now')) game.showBeatTarget?.();
+    });
     // pointerdown, not click: the HUD re-renders several times a second
     $('#family').addEventListener('pointerdown', (e) => {
       const c = e.target.closest('.card');
@@ -92,7 +95,7 @@ export class UI {
     const guide = sim.power ? g.beats?.guidance() : null;
     set($('#objectives'), '<div class="todo-list">' + g.objectives.map((o) =>
       `<div class="${o.done ? 'done' : o.failed ? 'failed' : o.prologue && !o.current ? 'later' : 'current'}">${o.done ? '☑ ' : o.failed ? '☒ ' : o.prologue && !o.current ? '' : '☐ '}${esc(o.text)}</div>`).join('') + '</div>' +
-      (guide ? `<button class="now" title="Center the camera and select the family member"><b>Now:</b> ${esc(guide.text)}${guide.target ? ' <span>Show me ↗</span>' : ''}</button>` : ''));
+      (guide ? `<button class="now" title="Center the camera and select the family member"><b>Now:</b> ${esc(guide.text)}${guide.target ? ' <span>Show me ↗</span>' : ''}</button>${guide.canSkip ? '<button class="skip-ahead">Skip ahead ⏩</button>' : ''}` : ''));
 
     // Compact chips keep all five needs visible without occupying a column.
     set($('#family'), g.family.map((m) => {

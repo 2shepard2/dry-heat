@@ -143,3 +143,5 @@ button:disabled { opacity: 0.45; cursor: default; }
 #log button { float: right; padding: 1px 5px; font-size: 10px; }
 #help { bottom: 10px; right: 10px; max-width: 360px; }
 #help summary { cursor: pointer; }
+
+#objectives .skip-ahead { color: #ffcf68; border: 1px solid #f4ca6b; background: #29271f; padding: 8px; }

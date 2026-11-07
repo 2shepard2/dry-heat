@@ -49,6 +49,33 @@ export class Prologue {
     game.readDecisions = () => ({ ...game.decisions });
   }
   get paused() { return this.choiceReady && !this.pending && !this.thenStarted && !this.trip && !this.boarding && !this.current?.optional; }
+  // A hurry belongs to one quiet wait or task, never to the following prompt.
+  skipContext() {
+    if (this.g.sim.phase !== 'prologue' || !this.current || this.pending || this.boarding || this.lines.length || this.lineDelay > 1e-8 || this.choiceReady) return null;
+    const work = this.g.family.flatMap((m) => {
+      const w = m.task || m.goal;
+      return w && !w.autonomous ? [w] : m.path.length && !w ? [m] : [];
+    });
+    if (this.waiting || this.current.do?.type === 'wait' || this.trip) return work.length ? null : this.current;
+    if (work.length === 1 && this.g.family.some((m) => m.task === work[0])
+      && work[0].type === 'prologue' && work[0].target === this.current.do?.target && work[0].dur >= 15) return work[0];
+    return null;
+  }
+  skipAhead() {
+    const context = this.skipContext();
+    if (!context || this.hurry) return false;
+    this.hurry = { context, speed: this.g.sim.speed };
+    this.g.sim.speed = 12;
+    return true;
+  }
+  stopSkipping() {
+    if (!this.hurry) return;
+    this.g.sim.speed = this.hurry.speed;
+    this.hurry = null;
+  }
+  updateSkipping() {
+    if (this.hurry && this.skipContext() !== this.hurry.context) this.stopSkipping();
+  }
   start() { if (this.index < 0) this.next(); }
   jump(id) {
     const i = this.beats.findIndex((b) => b.id === id);
@@ -59,6 +86,7 @@ export class Prologue {
   }
   next() { this.index++; if (this.beats[this.index]) this.begin(this.beats[this.index]); else this.current = null; }
   begin(b, force = false) {
+    this.stopSkipping();
     this.current = b; this.waiting = !force && this.g.sim.min < beatMinute(b);
     this.choiceReady = false; this.thenStarted = false; this.present(null);
     this.aurora(false, b);
@@ -83,6 +111,7 @@ export class Prologue {
     }
   }
   update(dtMin, dtReal) {
+    this.updateSkipping();
     if (this.g.sim.phase !== 'prologue' || !this.current) return;
     this.updateAbsences();
     if (this.waiting) {
@@ -99,13 +128,14 @@ export class Prologue {
     if (d.type === 'wait' && this.elapsed >= (d.minutes || 0)) this.pending = true;
     if (d.type === 'walk') {
       const o = this.targets[d.target];
-      if (this.g.family.some((m) => (!d.who || m.id === d.who) && !m.task?.autonomous && !m.goal?.autonomous && !m.away && Math.hypot(m.pos.x - o.x - 0.5, m.pos.z - o.y - 0.5) < 2)) this.pending = true;
+      if (this.g.family.some((m) => (!d.who || m.id === d.who) && !m.autonomousLocation && !m.task?.autonomous && !m.goal?.autonomous && !m.away && Math.hypot(m.pos.x - o.x - 0.5, m.pos.z - o.y - 0.5) < 2)) this.pending = true;
     }
     if (this.pending && b.then && !this.thenStarted) {
       this.thenStarted = true; this.pending = false; this.queueTrip(b.then);
     }
     if (b.optional && !this.trip && !this.boarding && this.elapsed >= (b.timeout ?? 30)) { this.restoreTrip(); this.pending = true; }
     if (this.pending && !this.lines.length && this.lineDelay <= 1e-8) this.finish();
+    this.updateSkipping();
   }
   notify(type, who, target) {
     if (type === 'boarding' && this.boarding) { this.boarding.arrived.add(who); return true; }
@@ -177,7 +207,7 @@ export class Prologue {
     if (this.pending && !this.trip && !this.boarding) { target = null; text = 'Done. Listening in…'; }
     if (this.boarding) { target = this.targets.car; text = 'Getting in the car — the family will drive away together'; }
     if (this.trip) { target = null; text = `${this.trip.label} — back around ${this.clockAt(this.trip.until)}; wait for them to return`; }
-    return { text, target, crew };
+    return { text, target, crew, canSkip: !!this.skipContext() && !this.hurry };
   }
   clockAt(minute) {
     const local = (minute % 1440 + 1440) % 1440, h = Math.floor(local / 60);
@@ -292,6 +322,7 @@ export class Prologue {
   }
   outage(defaults = false) {
     if (this.g.sim.phase === 'outage') return false;
+    this.stopSkipping();
     this.restoreTrip(); this.setCarAway(false); this.boarding = null; this.present(null); this.aurora(false);
     const g = this.g;
     g.prologueSnapshot = { decisions: { ...g.decisions }, flags: { ...g.flags }, completed: [...this.completed] };
@@ -299,7 +330,7 @@ export class Prologue {
     for (const m of g.family) { m.away = false; m.obj.visible = true; m.stopTask(true); m.pos.set(m.def.at[0] + 0.5, 0, m.def.at[1] + 0.5);
       // They slept the night in the AC: wake rested and fed, whatever the prologue clock did.
       Object.assign(m.needs, { energy: Math.max(m.needs.energy, 80), food: Math.max(m.needs.food, 70), hydration: Math.max(m.needs.hydration, 95) }); }
-    g.sim.phase = 'outage'; g.sim.min = POWER_OUT_MIN; g.sim.indoor = 78; g.sim.speed = 1;
+    g.sim.phase = 'outage'; g.sim.min = POWER_OUT_MIN; g.sim.indoor = 78;
     applyDecisions(g);
     this.current = null; this.lines = []; this.cut(); return true;
   }
