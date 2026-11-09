@@ -51,7 +51,7 @@ Schema (contract; `src/data/chores.js` exports `CHORES`):
   minutes: 10,                 // game minutes of work at the target (use/order)
   lines: [{ who, text }],      // optional, spoken (bubbles) when it completes
   log: '...',                  // optional narration on completion
-  reveal: { item, into }       // optional: put one item (data/items.js id) into a target's container,
+  reveal: { item, into }       // optional (`into` must be a container target): put one item (data/items.js id) into a target's container,
                                //   e.g. the flashlight is now in the junk drawer; the player learned where it lives
 }
 ```
@@ -95,6 +95,23 @@ water the citrus (Elena, hose: reveals garden_hose in the garage), put the laund
 flashlight for the closet bulb (Jess by order: reveals flashlight in the kitchen drawer), put the camping cooler back
 in the garage (Marcus: reveals cooler), change the AC filter (Marcus).
 Friday: make breakfast (Marcus), put the groceries away (Elena), find the radio in the hall closet (Jess:
-reveals radio_handcrank), fold the laundry (Elena), cash in the junk drawer (Elena: reveals cash_wad), get the
+reveals radio_handcrank), fold the laundry (Elena), get the
 camp lantern down for Saturday (Marcus: reveals camp_lantern).
 One short exchange of lines on about half of them. Marriage rule: the strain is in who doesn't answer.
+
+## 4c-B contracts
+
+- `Prologue` accepts injectable `chores` (default `CHORES`); the content schema above is unchanged. `offeredChores()` returns unfinished chores in the half-open absolute window `[(day-1)*1440+from, (day-1)*1440+to)`, earliest deadline first (id breaks ties). `doneChores` is separate from story `completed`; expired unfinished chores disappear silently, including their active tasks and objectives. Completed chores remain checked in that day's list.
+- `guidance().chores` contains at most two offered chore records. UI renders their `Also: label (suggested person)` hints and dim optional objectives; main renders smaller, translucent rings in the suggested person's colour. All offered chores, including those beyond the two hints, are available from their target's normal object menu. Existing beat target keys are unchanged.
+- `interactChore(id, parents)` lets either available parent do `use`/`walk`; an `order` sends only `do.kid`, using the existing obedience check. Work uses existing Member `prologue` tasks with both `beatType` and `target` namespaced as `chore:<id>`; `notify` routes those directly to chore completion. Walks finish at arrival; use/order work takes `minutes ?? 10` game minutes. A story interaction/boarding can replace that task; unfinished chores stay offered and restart from zero when requested again. Optional arrival sets the same proximity-isolation flag as routines, so it cannot complete a story walk; a subsequent manual approach clears it. Namespaced targets also prevent chore work from counting as a partner on a together beat.
+- Completion is guarded by the still-open window and done set. It queues optional speech, writes `log`, and adds one `makeEntry(reveal.item)` to `targets[reveal.into].items`. Chore speech uses independent queue/timing state and optional `game.bubbles.say(who, text)`; it waits for a gap in story speech but never delays a story completion or choice. `speak()` remains owned by 4c-A and is unchanged here.
+- Hurry records the next unopened chore boundary. `limitStep(dtMin)` clamps a hurried frame to that boundary; main calls it before advancing the clock. `updateSkipping()` restores the exact prior speed, including pause, at the opening. Already offered chores do not suppress Skip ahead; explicit manual work retains 4b's hurry interruption rules. The seated desk beat uses a stable hurry context through seating and autonomous work, until noon or another interruption.
+- Marcus's initial manual desk task takes two minutes and sets `deskStarted`; the desk beat finishes at noon independently of his current location/task. His autonomous `routine` returns to the desk during 08:30–12:00, plus Friday 13:00–17:00, after manual work ends. This work routine bypasses ordinary autonomy grace, respects disabled autonomy and urgent needs, never notifies a beat, and releases itself outside work hours.
+- Trips may set `background: true`: boarding/departure completes the originating step; the off-map crew and car return independently without completing the current beat. The trip retains its originating day for camp absence scheduling. P2 uses this for Elena/Theo until 10:30, allowing Marcus's P3 desk start at 08:30. Elena's 15:00 pickup remains a scheduled absence. The former P3 doorway conversation moves to the noon desk break/P4, when Elena is home; Marcus asks Jess to do the dishes at Elena's request.
+- P13 retains the thunderhead dialogue but uses a zero-minute wait, then leaves free time until the 17:00 gas decision for optional chores. All 18 beat ids, four decisions, aurora and outage cut are retained. No chore content is changed by 4c-B.
+
+Validation: `node --test src/systems.test.js` on Node 22. All original 32 scenarios retained; nine fixture-based scenarios cover chore windows/deadlines/expiry, work duration, speech/log/reveal, use/walk/together isolation, parent and ordered-child access, interruption, desk return and Friday hours, Elena's background trip/pickup, and exact hurry boundaries. Existing full prologue playthroughs still exercise both decision paths. Browser playthrough remains a CT141 merge check; `tools/playthrough.mjs` now observes Elena's Thursday trip and the two-hint limit.
+
+Open decisions: none for the engine. Merge 4c-A/C's bubbles and real chore content alongside this branch; the two sample chores alone do not provide all-day coverage. Content must use the existing mapped target keys (or coordinate new props in `mapBeatTargets`).
+
+Doc gaps: the required knowledge search found no Dry Heat recipe, and this checkout has no `AGENTS.md`. Add a short project recipe/agent front page pointing to the wave specs, file ownership, Node 22 checks, and CT141 browser verification.

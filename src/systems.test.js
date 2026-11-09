@@ -208,12 +208,12 @@ test('radio is reusable, plays oldest due once; events enforce maxDay and decisi
 });
 
 
-function prologue(beats) {
+function prologue(beats, chores = []) {
   const f = fixture();
   f.g.sim = new Sim({ phase: 'prologue' });
   f.g.selected = [f.m];
   const choices = [];
-  f.b = new Prologue(f.g, { ...(beats ? { beats } : {}), present: (c) => choices.push(c) });
+  f.b = new Prologue(f.g, { chores, ...(beats ? { beats } : {}), present: (c) => choices.push(c) });
   if (beats?.length) f.g.sim.min = beatMinute(beats[0]);
   f.choices = choices; f.b.start(); return f;
 }
@@ -378,7 +378,7 @@ test('fresh no-jump playthrough: all 18 beats, real paths/trips, clock, decision
       b.update(dtMin, dtReal);
       seconds += dtReal;
       if (b.trip) {
-        seenAway.add(b.current.id);
+        seenAway.add(b.trip.background ? 'p2' : b.current.id);
         assert.equal(b.targets.car.mesh.visible, false);
         for (const member of b.trip.crew) { assert.equal(member.away, true); assert.equal(member.obj.visible, false); }
       }
@@ -430,9 +430,9 @@ test('choices wait for speech in real seconds, stay unpicked, and reject early i
     do: { type: 'choice', flag: 'gas', options: [{ value: 'full', label: 'Fill up' }, { value: 'quarter', label: 'Later' }] } }]);
   assert.equal(choices.at(-1), null); assert.equal(g.pickChoice('full'), false);
   b.update(100, 0); assert.equal(b.lines.length, 1);
-  b.update(100, 2.4); assert.equal(b.lines.length, 1); assert.equal(b.choiceReady, false);
-  b.update(0, .1); assert.equal(b.lines.length, 0); assert.equal(b.choiceReady, false);
-  b.update(0, 2.5); assert.equal(b.choiceReady, true); assert.equal(b.paused, true);
+  b.update(100, 1.5); assert.equal(b.lines.length, 1); assert.equal(b.choiceReady, false);  // pace 1.9 s
+  b.update(0, .5); assert.equal(b.lines.length, 0); assert.equal(b.choiceReady, false);
+  b.update(0, 2); assert.equal(b.choiceReady, true); assert.equal(b.paused, true);
   assert.deepEqual(g.decisions, {}); assert.equal(choices.at(-1).flag, 'gas');
 });
 
@@ -598,7 +598,7 @@ test('autonomy neither chooses nor completes use/walk beats, even after a routin
   }
 });
 
-test('Skip ahead restores the prior speed when the desk task completes', () => {
+test('Skip ahead restores the prior speed when the seated desk beat reaches noon', () => {
   for (const speed of [0, 1, 4]) {
     const { g, b, m } = prologue([
       { id: 'desk', day: -1, at: 435, do: { type: 'use', target: 'desk' } },
@@ -651,4 +651,269 @@ test('manual arrivals reserve separate standing cells and walking receives order
   assert.equal(m.path.length, 0);
   assert.equal(m.freeAt, g.sim.min + 45);
   assert.match(m.doing(), /Waiting/);
+});
+
+
+// Chore engine fixtures deliberately do not depend on MiniMax's content data.
+const choreFixture = (extra = {}) => ({ id: 'c-test', day: -1, from: 435, to: 500,
+  who: 'elena', label: 'Put the lunch away', do: { type: 'use', target: 'fridge' }, minutes: 8, ...extra });
+const quietBeat = { id: 'quiet', day: -1, at: 435, do: { type: 'use', target: 'sink' } };
+
+test('chores open and expire silently, sort by deadline, and appear as dim optional objectives', () => {
+  const chores = [choreFixture({ id: 'late', to: 550 }), choreFixture({ id: 'first' }),
+    choreFixture({ id: 'second', to: 510 }), choreFixture({ id: 'future', from: 560, to: 600 })];
+  const { g, b, m, messages } = prologue([quietBeat], chores);
+  assert.deepEqual(b.offeredChores().map((c) => c.id), ['first', 'second', 'late']);
+  assert.deepEqual(b.guidance().chores.map((c) => c.id), ['first', 'second']);
+  assert.ok(g.objectives.every((o) => o.optional && !o.current));
+  assert.ok(b.interactChore('first', [m])); arrive(m);
+  g.sim.min = -2880 + 550; b.update(0, 0);
+  assert.equal(m.task, null); assert.deepEqual(b.offeredChores(), []);
+  assert.deepEqual(g.objectives, []); assert.deepEqual(messages, []);
+  assert.equal(b.notify('chore:first', m.id, 'chore:first'), false);
+  g.sim.min = -2880 + 560; b.update(0, 0);
+  assert.deepEqual(b.offeredChores().map((c) => c.id), ['future']);
+});
+
+test('chore completion waits for work, speaks, logs, reveals once and never completes a use beat', () => {
+  const c = choreFixture({ lines: [{ who: 'elena', text: 'There it is.' }], log: 'The drawer closes.',
+    reveal: { item: 'flashlight', into: 'inhaler' } });
+  const { g, b, e, messages } = prologue([{ ...quietBeat, do: c.do }], [c]);
+  const bubbled = []; g.bubbles = { say: (...args) => bubbled.push(args) };
+  assert.ok(b.interactChore(c.id, [e])); arrive(e); e.updateTask(7);
+  assert.equal(b.doneChores.has(c.id), false);
+  e.updateTask(1); b.update(0, 0);
+  assert.ok(b.doneChores.has(c.id)); assert.equal(b.current.id, 'quiet'); assert.equal(b.pending, false);
+  assert.equal(b.completed.size, 0); assert.deepEqual(b.offeredChores(), []);
+  assert.ok(g.objectives.some((o) => o.optional && o.done));
+  assert.deepEqual(messages, ['The drawer closes.', 'Elena: "There it is."']);
+  assert.deepEqual(bubbled, [['elena', 'There it is.']]);
+  assert.equal(b.targets.inhaler.items.filter((e) => e.id === 'flashlight').length, 1);
+  assert.equal(b.notify('chore:c-test', 'elena', 'chore:c-test'), false);
+  assert.equal(b.interactChore(c.id, [e]), false);
+});
+
+test('a chore walk cannot complete the story walk at the same target; manual approach still can', () => {
+  const c = choreFixture({ do: { type: 'walk', target: 'front-door' } });
+  const { b, m } = prologue([{ ...quietBeat, do: { type: 'walk', who: 'marcus', target: 'front-door' } }], [c]);
+  assert.ok(b.interactChore(c.id, [m])); finish(m); b.update(0, 0);
+  assert.ok(b.doneChores.has(c.id)); assert.equal(b.completed.size, 0); assert.equal(b.pending, false);
+  assert.ok(b.interact('front-door', [m])); finish(m); b.update(0, 0);
+  assert.ok(b.completed.has('quiet'));
+});
+
+test('only parents initiate chores; kids work by order and a beat can interrupt them', () => {
+  const c = choreFixture({ who: 'jess', do: { type: 'order', kid: 'jess', target: 'sink' } });
+  const { g, b, m } = prologue([{ ...quietBeat, do: c.do }], [c]);
+  const jess = g.family.find((m) => m.id === 'jess');
+  assert.equal(b.interactChore(c.id, [jess]), false);
+  assert.ok(b.interactChore(c.id, [m])); arrive(jess);
+  assert.equal(jess.task.beatType, 'chore:c-test');
+  assert.ok(b.interact('sink', [m]));
+  assert.equal((jess.task || jess.goal).beatType, 'order');
+  assert.equal(b.doneChores.size, 0); assert.equal(b.offeredChores().length, 1);
+  finish(jess); b.update(0, 0); assert.ok(b.completed.has('quiet'));
+});
+
+test('chore speech does not delay choices or finishing story beats', () => {
+  const c = choreFixture({ lines: Array.from({ length: 20 }, () => ({ who: 'elena', text: 'Okay.' })) });
+  const { b, m } = prologue([quietBeat,
+    { id: 'choose', day: -1, at: 435, do: { type: 'choice', flag: 'gas', options: [{ value: 'full' }] } }], [c]);
+  b.interactChore(c.id, [m]); finish(m);
+  b.interact('sink', [m]); finish(m); b.update(0, 0);
+  assert.equal(b.current.id, 'choose'); assert.ok(b.choiceReady);
+  assert.ok(b.choreLines.length > 0); assert.ok(b.pick('full')); b.update(0, 0);
+  assert.ok(b.completed.has('choose'));
+});
+
+test('Marcus returns to the desk after a chore and P3 finishes at noon even while he is away from it', () => {
+  const { g, b, m } = prologue([{ id: 'desk', day: -1, at: 510,
+    do: { type: 'use', who: 'marcus', target: 'desk' } }],
+    [choreFixture({ from: 510, to: 800, minutes: 5 })]);
+  assert.ok(b.interact('desk', [m])); finish(m, 2); b.update(0, 0);
+  assert.ok(b.deskStarted); assert.equal(b.completed.size, 0);
+  assert.ok(b.interactChore('c-test', [m])); finish(m, 5);
+  m.liveOwnLife(1);
+  assert.ok((m.task || m.goal)?.deskRoutine); arrive(m);
+  assert.equal(m.task.type, 'routine'); assert.equal(m.task.obj, b.targets.desk);
+  assert.ok(m.task.autonomous); assert.equal(b.completed.size, 0);
+  m.useObject(b.targets.coffee, 'leisure');
+  g.sim.min = -2880 + 720; b.update(0, 0);
+  assert.ok(b.completed.has('desk'));
+  // The same one-time seating enables Friday's afternoon work routine.
+  m.stopTask(true); g.sim.min = -1440 + 780; m.liveOwnLife(1);
+  assert.ok((m.task || m.goal)?.deskRoutine);
+  g.sim.min = -1440 + 1020; m.liveOwnLife(1);
+  assert.ok(!(m.task || m.goal)?.deskRoutine);
+});
+
+test('P2 sends Elena and Theo away while Marcus can start P3 before nine', () => {
+  const { g, b, m, e } = prologue();
+  b.jump('p2'); b.interact('car', [m]); finish(g.family.find((m) => m.id === 'theo'));
+  b.update(0, 0); finish(e); finish(g.family.find((m) => m.id === 'theo')); flushLines(b);
+  assert.equal(b.current.id, 'p3'); assert.ok(b.trip.background);
+  assert.ok(e.away); assert.ok(!m.away);
+  assert.deepEqual(b.trip.crew.map((m) => m.id), ['elena', 'theo']);
+  g.sim.min = -2880 + 510; b.update(0, 0);
+  assert.ok(b.interact('desk', [m])); finish(m, 2); b.update(0, 0);
+  assert.ok(b.deskStarted); assert.equal(b.pending, false);
+  g.sim.min = -2880 + 630; b.update(0, 0);
+  assert.equal(e.away, false); assert.ok(g.family.find((m) => m.id === 'theo').away);
+  assert.equal(b.current.id, 'p3'); assert.equal(b.pending, false);
+  g.sim.min = -2880 + 880; b.update(0, 0); assert.ok(e.away); assert.ok(!m.away);
+  g.sim.min = -2880 + 900; b.update(0, 0); assert.equal(e.away, false);
+  assert.ok(b.completed.has('camp-pickup'));
+});
+
+test('Skip ahead stays available with offered chores but stops exactly at the next opening', () => {
+  for (const speed of [0, 1, 4]) {
+    const { g, b } = prologue([{ ...quietBeat, do: { type: 'wait', minutes: 100 } }], [
+      choreFixture({ id: 'open' }), choreFixture({ id: 'new', from: 440, to: 441 }),
+    ]);
+    g.sim.speed = speed; assert.ok(b.skipAhead());
+    const dt = b.limitStep(120); assert.equal(dt, 5);
+    g.sim.step(dt); b.update(dt, .1);
+    assert.equal(g.sim.min, -2880 + 440); assert.equal(g.sim.speed, speed); assert.equal(b.hurry, null);
+    assert.deepEqual(b.offeredChores().map((c) => c.id), ['new', 'open']);
+    assert.ok(b.guidance().canSkip);
+  }
+});
+
+
+test('chore work cannot stand in for the second parent on a together beat', () => {
+  const { b, m, e } = prologue([{ ...quietBeat, do: { type: 'together', target: 'dinner-table' } }],
+    [choreFixture({ do: { type: 'use', target: 'dinner-table' } })]);
+  assert.ok(b.interact('dinner-table', [m, e])); arrive(m); arrive(e);
+  assert.ok(b.interactChore('c-test', [e])); arrive(e);
+  m.updateTask(20);
+  assert.equal(m.task.t, 0); assert.equal(b.pending, false);
+  finish(e); b.update(0, 0);
+  assert.equal(b.completed.size, 0);
+  assert.ok(b.interact('dinner-table', [m, e])); arrive(m); arrive(e); finish(m); finish(e); b.update(0, 0);
+  assert.ok(b.completed.has('quiet'));
+});
+
+// ---- wave 4c: speech bubbles -------------------------------------------------
+// A tiny DOM stand-in: bubbles.js only needs to create nodes, set text and style.
+function fakeDom() {
+  const node = () => ({
+    className: '', textContent: '', style: {}, children: [], parent: null,
+    offsetWidth: 120, offsetHeight: 40,
+    appendChild(c) { this.children.push(c); c.parent = this; },
+    remove() { this.removed = true; if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this); },
+  });
+  const host = node();
+  globalThis.document = {
+    getElementById: (id) => (id === 'bubbles' ? host : null),
+    createElement: () => node(),
+    body: node(),
+  };
+  globalThis.innerWidth = 800; globalThis.innerHeight = 600;
+  return host;
+}
+
+test('bubble lifetime and pacing follow the wave 4c numbers', async () => {
+  const { bubbleLifetime, paceDelay } = await import('./bubbles.js');
+  assert.equal(bubbleLifetime(''), 2.5);              // clamped up to the floor
+  assert.equal(bubbleLifetime('short line'), 2.5);    // 1.8 + 0.06*10 = 2.4 -> 2.5
+  assert.equal(bubbleLifetime('x'.repeat(20)), 3.0);  // 1.8 + 1.2 = 3.0
+  assert.equal(bubbleLifetime('x'.repeat(87)), 7);    // clamped down to the ceiling
+  assert.equal(bubbleLifetime('x'.repeat(200)), 7);
+  assert.equal(paceDelay('x'.repeat(20)), 2.4);       // lifetime - 0.6
+  assert.equal(paceDelay('hi'), 1.9);                 // lifetime 2.5 - 0.6
+  assert.ok(paceDelay('hi') >= 1.6);                  // never faster than 1.6 s
+});
+
+test('overlapping bubbles are pushed apart vertically, side by side ones are not', async () => {
+  const { pushApart } = await import('./bubbles.js');
+  const boxes = [{ x: 100, y: 200, w: 200, h: 40 }, { x: 100, y: 210, w: 200, h: 40 }];
+  const out = pushApart(boxes);
+  assert.ok(Math.abs(out[0].y - out[1].y) >= 40 + 6 - 1e-9, 'boxes must not overlap');
+  assert.ok(out[0].y < out[1].y, 'the higher box stays higher');
+  assert.deepEqual(boxes, [{ x: 100, y: 200, w: 200, h: 40 }, { x: 100, y: 210, w: 200, h: 40 }], 'input untouched');
+  const apart = pushApart([{ x: 100, y: 100, w: 60, h: 40 }, { x: 400, y: 110, w: 60, h: 40 }]);
+  assert.equal(apart[0].y, 100);
+  assert.equal(apart[1].y, 110);
+});
+
+test('bubbles: one per speaker, replaced by a new line, off map and off screen get none', async () => {
+  const { createBubbles } = await import('./bubbles.js');
+  const host = fakeDom();
+  const camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 100);
+  camera.position.set(0, 10, 10);
+  camera.lookAt(0, 0, 0);
+  camera.updateMatrixWorld(true);
+  const person = (id, x) => ({ id, name: id, pos: new THREE.Vector3(x, 0, 0), def: { h: 1.8 }, away: false, dead: false, asleep: false, obj: { visible: true } });
+  const marcus = person('marcus', 0), elena = person('elena', 1);
+  const g = { family: [marcus, elena], map: { sites: [] }, sim: { speed: 1 } };
+  const bubbles = createBubbles(g, { camera });
+
+  assert.ok(bubbles.say('marcus', 'First line'), 'an on-map family member bubbles');
+  assert.equal(host.children.length, 1);
+  bubbles.say('marcus', 'Second line');
+  assert.equal(host.children.length, 1, 'a new line from the same speaker replaces the bubble');
+  assert.equal(host.children[0].textContent, 'Second line');
+  assert.ok(bubbles.say('elena', 'Mine too'));
+  assert.equal(host.children.length, 2);
+  assert.equal(bubbles.say('radio', 'Radio traffic'), null, 'radio is log only');
+  assert.equal(bubbles.say('nobody', 'No such person'), null, 'no figure, no bubble');
+  marcus.away = true;
+  assert.equal(bubbles.say('marcus', 'On the road'), null, 'a speaker on a trip gets no bubble');
+
+  // the bubble ages out, and the clock holds while the game is paused
+  bubbles.update(1);
+  const elenaBubble = host.children[1];
+  assert.notEqual(elenaBubble.style.display, 'none');
+  assert.equal(host.children[0].style.display, 'none', 'a speaker on a trip has no bubble');
+  g.sim.speed = 0;
+  bubbles.update(30);
+  assert.notEqual(elenaBubble.style.display, 'none', 'a paused game holds the bubble');
+  g.sim.speed = 1;
+  bubbles.update(30);
+  assert.equal(host.children.length, 0, 'the bubbles are gone after their lifetime');
+});
+
+test('beat lines pace by bubble lifetime and hurry at 1.4 s once the step is done', async () => {
+  const { paceDelay } = await import('./bubbles.js');
+  const { g, b, messages } = prologue([
+    { id: 'talk', day: -1, at: 435, lines: [
+      { who: 'elena', text: 'Short.' },
+      { who: 'marcus', text: 'x'.repeat(100) },
+      { who: 'elena', text: 'Again.' },
+    ], do: { type: 'use', target: 'coffee' } },
+  ]);
+  const said = [];
+  g.bubbles = { say: (who, text) => said.push([who, text]) };
+  b.update(0, 0.01);
+  assert.equal(messages.length, 1, 'the first line is spoken at once');
+  assert.deepEqual(said[0], ['elena', 'Short.'], 'and it reaches the bubble');
+  b.update(0, 1.0);
+  assert.equal(messages.length, 1, 'the next line waits for the bubble');
+  b.update(0, 1.0);
+  assert.equal(messages.length, 2, 'short line: lifetime 2.5 - 0.6 = 1.9 s');
+  assert.deepEqual(said[1], ['marcus', 'x'.repeat(100)]);
+  assert.equal(paceDelay('x'.repeat(100)), 6.4, 'a long line holds the floor for a while');
+  b.notify('use', 'marcus', 'coffee');   // the step is done: the rest hurries
+  b.update(0, 1.0);
+  assert.equal(messages.length, 2, 'the hurry is 1.4 s, not 1.0 s');
+  b.update(0, 0.6);
+  assert.equal(messages.length, 3, 'and then the line comes');
+});
+
+test('a spoken need line bubbles from the kid; narration stays in the log', () => {
+  const { g, messages } = fixture();
+  const said = [];
+  g.bubbles = { say: (who, text) => said.push([who, text]) };
+  const theo = g.family.find((x) => x.id === 'theo');
+  theo.deficit = 0.4;                       // 1.7% of body mass: thirsty, nothing worse
+  theo.alerts();
+  assert.deepEqual(said, [['theo', "I'm thirsty. Can I have water?"]]);
+  assert.ok(messages.includes('Theo: "I\'m thirsty. Can I have water?"'), 'the log keeps the line');
+  theo.needs.food = 10;
+  theo.alerts();
+  assert.deepEqual(said[1], ['theo', "My stomach hurts. When's breakfast?"]);
+  theo.needs.morale = 10;
+  theo.alerts();
+  assert.equal(said.length, 2, 'narration gets no bubble');
+  assert.ok(messages.some((m) => m.includes('Theo is crying')));
 });

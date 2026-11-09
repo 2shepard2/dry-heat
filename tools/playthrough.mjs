@@ -32,6 +32,10 @@ page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + 
 const st = () => page.evaluate(() => {
   const g = window.__game; const q = (s) => document.querySelector(s);
   return {
+    phase: g.sim.phase, beat: g.beats.current?.id,
+    trip: g.beats.trip?.crew.map((m) => m.id) || [],
+    chores: g.beats.offeredChores().map((c) => c.id),
+    also: [...document.querySelectorAll('#objectives .later')].filter((el) => el.textContent.startsWith('Also:')).map((el) => el.textContent),
     speed: g.sim.speed, clock: q('#clock')?.textContent?.trim(),
     now: q('#objectives .now')?.textContent?.trim() || '',
     skip: !!q('#objectives .skip-ahead'),
@@ -56,10 +60,18 @@ await snap('start');
 
 // a player who wants it quicker clicks the fast button
 await page.click('#speed button[data-s="4"]');
-let skipResult = null; const overlaps = new Set(); let sameCellSamples = 0;
+let skipResult = null; let elenaCampSeen = false, choresSeen = false; const overlaps = new Set(); let sameCellSamples = 0;
 const t0 = Date.now();
 for (let i = 0; i < 60 && Date.now() - t0 < 9 * 60 * 1000; i++) {
   s = await st();
+  if (s.trip.includes('theo') && (s.beat === 'p2' || s.beat === 'p3')) {
+    if (!s.trip.includes('elena') || s.trip.includes('marcus')) throw new Error('Thursday camp driver must be Elena');
+    elenaCampSeen = true;
+  }
+  if (s.chores.length) {
+    if (!s.also.length || s.also.length > 2) throw new Error('Offered chores need one or two Also hints');
+    choresSeen = true;
+  }
   // idle overlap check: two present people on one cell
   const byCell = {};
   for (const m of s.fam) (byCell[m.cell] ||= []).push(m.id);
@@ -120,6 +132,8 @@ function acted_wait() { return 4000; }
 s = await st();
 await snap('end');
 note(`END ${s.clock} x${s.speed} now="${s.now}"`);
+note(`CHECK Elena Thursday camp trip: ${elenaCampSeen ? 'PASS' : 'not observed'}`);
+note(`CHECK offered chore hints: ${choresSeen ? 'PASS' : 'not observed'}`);
 note(`CHECK start speed 1x: ${startSpeedOk ? 'PASS' : 'FAIL'}`);
 note(`CHECK skip ahead: ${skipResult ? JSON.stringify(skipResult) : 'never appeared'}`);
 note(`CHECK same-cell samples: ${sameCellSamples} ${[...overlaps].slice(0, 12).join(' | ')}`);

@@ -93,9 +93,9 @@ export class UI {
 
     // objectives
     const guide = sim.power ? g.beats?.guidance() : null;
-    set($('#objectives'), '<div class="todo-list">' + g.objectives.map((o) =>
+    set($('#objectives'), `<div class="todo-list"${guide ? ' style="display:flex"' : ''}>` + g.objectives.map((o) =>
       `<div class="${o.done ? 'done' : o.failed ? 'failed' : o.prologue && !o.current ? 'later' : 'current'}">${o.done ? '☑ ' : o.failed ? '☒ ' : o.prologue && !o.current ? '' : '☐ '}${esc(o.text)}</div>`).join('') + '</div>' +
-      (guide ? `<button class="now" title="Center the camera and select the family member"><b>Now:</b> ${esc(guide.text)}${guide.target ? ' <span>Show me ↗</span>' : ''}</button>${guide.canSkip ? '<button class="skip-ahead">Skip ahead ⏩</button>' : ''}` : ''));
+      (guide ? `<button class="now" title="Center the camera and select the family member"><b>Now:</b> ${esc(guide.text)}${guide.target ? ' <span>Show me ↗</span>' : ''}</button>${(guide.chores || []).map((c) => `<div class="later">Also: ${esc(c.label)} (${esc(g.family.find((m) => m.id === c.who)?.name || c.who)})</div>`).join('')}${guide.canSkip ? '<button class="skip-ahead">Skip ahead ⏩</button>' : ''}` : ''));
 
     // Compact chips keep all five needs visible without occupying a column.
     set($('#family'), g.family.map((m) => {

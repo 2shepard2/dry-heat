@@ -6,6 +6,7 @@ import { buildWorld } from './build.js';
 import { Sim } from './sim.js';
 import { Prologue } from './beats.js';
 import { prologueScene } from './prologue-scene.js';
+import { createBubbles } from './bubbles.js';
 import { NightEvents } from './events.js';
 import { SurvivalSystems } from './systems.js';
 import { Member, FAMILY } from './family.js';
@@ -611,6 +612,7 @@ game.systems = new SurvivalSystems(game);
 
 // ---------------------------------------------------------------- selection + commands
 const rings = new Map();
+const choreMarkers = new Map();
 const marker = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.42, 24), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false, depthTest: false }));
 marker.rotation.x = -Math.PI / 2;
 marker.renderOrder = 5;
@@ -659,8 +661,12 @@ function objectMenu(o, cx, cy) {
     const target = o.beatTargets?.find((t) => t === d?.target) || (o.car && ['trip', 'together'].includes(d?.type) ? d.target : null);
     if (target && ['use', 'order', 'together', 'walk', 'trip'].includes(d?.type)) {
       items.push({ label: game.beats.guidance().text, primary: true,
-        disabled: game.beats.waiting || game.beats.pending || !!game.beats.trip || !!game.beats.boarding,
+        disabled: game.beats.waiting || game.beats.pending || !!(game.beats.trip && !game.beats.trip.background) || !!game.beats.boarding,
         fn: () => game.beats.interact(target, group) });
+    }
+    for (const c of game.beats.offeredChores().filter((c) => o.beatTargets?.includes(c.do.target))) {
+      items.push({ label: c.label + (c.do.type === 'order' ? ` (ask ${c.do.kid})` : ''),
+        fn: () => game.beats.interactChore(c.id, group) });
     }
     if (o.kind === 'bed' && d?.type === 'sleep') items.push({ label: 'Everyone: go to bed', primary: true, fn: () => game.beats.sleep() });
   }
@@ -720,7 +726,7 @@ function memberMenu(v, cx, cy) {
   if (sim.phase === 'prologue' && ((d?.type === 'order' && d.kid === v.id) || (d?.type === 'use' && ((d.target === 'inhaler' && v.id === 'theo') || d.who === v.id)))) {
     const who = d.who ? game.family.filter((m) => m.id === d.who) : game.selected;
     beatItems.push({ label: d.type === 'order' ? `${v.name}: ${d.target === 'car' ? 'Get in the car' : 'Wash dishes'}` : d.target === 'inhaler' ? 'Give Theo the inhaler' : `Use ${game.beats.targets[d.target]?.name || d.target}`,
-      primary: true, disabled: v.away || game.beats.waiting || game.beats.pending || !!game.beats.trip || !!game.beats.boarding,
+      primary: true, disabled: v.away || game.beats.waiting || game.beats.pending || !!(game.beats.trip && !game.beats.trip.background) || !!game.beats.boarding,
       fn: () => game.beats.interact(d.target, who) });
   }
   const helpers = game.selected.filter((m) => m !== v && m.canAct());
@@ -864,7 +870,7 @@ function frame(now) {
 
   if (started && !game.over) {
     game.beats.updateSkipping();
-    const dtMin = dtReal * (game.beats.paused || game.cutting ? 0 : sim.speed); // 1 real second = 1 game minute at 1x
+    const dtMin = game.beats.limitStep(dtReal * (game.beats.paused || game.cutting ? 0 : sim.speed)); // 1 real second = 1 game minute at 1x
     // sub-step the body sim at high speed so thresholds aren't skipped
     const steps = Math.max(1, Math.ceil(dtMin / 2));
     for (let s = 0; s < steps; s++) {
@@ -923,11 +929,29 @@ function frame(now) {
   }
 
   game.updateLights(0);
+  const offeredChores = game.beats.offeredChores();
+  for (const [id, mesh] of choreMarkers) mesh.visible = offeredChores.some((c) => c.id === id);
+  for (const c of offeredChores) {
+    let mesh = choreMarkers.get(c.id);
+    if (!mesh) {
+      const color = game.family.find((m) => m.id === c.who)?.def.color || 0xaaaaaa;
+      mesh = new THREE.Mesh(new THREE.RingGeometry(.36, .47, 24), new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity: .55, depthTest: false, depthWrite: false, side: THREE.DoubleSide,
+      }));
+      mesh.rotation.x = -Math.PI / 2; mesh.renderOrder = 19;
+      mesh.userData.obj = game.beats.targets[c.do.target];
+      choreMarkers.set(c.id, mesh); scene.add(mesh); world.pickables.push(mesh);
+    }
+    const o = game.beats.targets[c.do.target];
+    mesh.visible = !!o && !o.away;
+    if (o) mesh.position.set(o.x + (o.w || 1) / 2, .12, o.y + (o.h || 1) / 2);
+  }
   game.prologueVisual.update(now / 1000);
   updateLight();
   renderer.render(scene, camera);
   if (started) {
     ui.tagsUpdate(camera, renderer);
+    game.bubbles.update(dtReal);
     uiAcc += dtReal;
     if (uiAcc > 0.2) { uiAcc = 0; ui.refresh(); }
   }
@@ -997,6 +1021,7 @@ function installBuildSites() {
   installBuildSites();
   const outageObjectives = game.objectives.map((o) => ({ ...o }));
   game.prologueVisual = prologueScene(game, scene, cam);
+  game.bubbles = createBubbles(game, { camera, renderer });
   game.beats = new Prologue(game, {
     present(choice) {
       let card = $('#beat-choice');

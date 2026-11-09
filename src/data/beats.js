@@ -23,6 +23,7 @@
 //   activeObjective optional index of the current action in objectives (default 0); other items are dim
 //   then        optional { type: 'trip', who: [ids], target, minutes?, until?, label, away? }
 //               starts after do succeeds; everyone walks to the car before leaving; beat waits for return
+//               background: true advances after departure; the trip returns independently of later beats
 //               until = local clock minute of return on this beat's day (otherwise minutes = trip length)
 //               away: { who, until, pickup, minutes?, id? } keeps one traveller off map after driver returns;
 //               pickup leaves minutes (default 20) before until, then both come home and id completes
@@ -51,8 +52,8 @@
 //   cart: 'water' | 'pharmacy' | 'birthday'     gas: 'full' | 'quarter'
 
 // Who does what (wave 4a): the work is shared, and every step's actor is home at that hour.
-//   Marcus  p1 coffee, p2 camp run, p3 desk, p7 Pruitt, p13 the sky, p13a the gas
-//   Elena   p4a Walt, p6 pantry, p9 the meds and the camp run, p10 the register and the drive home,
+//   Marcus  p1 coffee, p3 desk, p7 Pruitt, p13 the sky, p13a the gas
+//   Elena   p2 camp run, p4a Walt, p6 pantry, p9 the meds and the camp run, p10 the register and the drive home,
 //           p14 dinner, p14a the street
 //   Jess    p4 the dishes, p5 the jugs, p11 the groceries in, p12 the sprinkler
 //   Theo    p2 the car, p9 the inhaler, p13a the gas station; also in p12, p14 and p14a
@@ -80,7 +81,7 @@ export const BEATS = [
   {
     id: 'p2', day: -1, at: 7 * 60 + 30,
     covers: ['p2', 'p3', 'p3'],
-    then: { type: 'trip', who: ['marcus', 'theo'], target: 'car', until: 8 * 60 + 25, label: 'Marcus drives Theo to day camp', away: { who: 'theo', until: 15 * 60, pickup: 'elena', minutes: 20, id: 'camp-pickup' } },
+    then: { type: 'trip', who: ['elena', 'theo'], target: 'car', until: 10 * 60 + 30, background: true, label: 'Elena drives Theo to day camp and goes to the dentist', away: { who: 'theo', until: 15 * 60, pickup: 'elena', minutes: 20, id: 'camp-pickup' } },
     objectives: ['Get Theo to day camp', 'Take the nine o\'clock call', 'Finish the Hendricks deck by noon'],
     lines: [
       { who: 'theo', text: 'I have a stomachache.' },
@@ -88,6 +89,7 @@ export const BEATS = [
       { who: 'elena', text: 'Can you take him? I have the dentist at nine.' },
       { who: 'marcus', text: 'I have got a call at nine.' },
       { who: 'elena', text: 'You had the nine o\'clock last week.' },
+      { who: 'elena', text: "Fine. I'll drop him on the way." },
     ],
     log: 'Nobody moves for a second. Marcus looks at the clock. Then Theo puts his shoes on without being told.',
     teach: 'Click Theo, then choose "Get in the car."',
@@ -99,14 +101,9 @@ export const BEATS = [
     id: 'p3', day: -1, at: 8 * 60 + 30,
     covers: ['p3', 'p4a', 'camp-pickup'],
     objectives: ['Finish the Hendricks deck', 'Take the two o\'clock call', 'Get Theo from camp at three'],
-    lines: [
-      { who: 'elena', text: 'Is that the Hendricks thing again?' },
-      { who: 'marcus', text: 'It is fine. It is just restructuring.' },
-      { who: 'elena', text: 'You said that in April.' },
-      { who: 'marcus', text: 'Then it is still fine.' },
-    ],
-    log: 'She stands in the doorway a while. Then she goes out and pulls the door to without letting it click.',
-    teach: 'Click the desk to work. The clock moves on its own while you do.',
+    lines: [],
+    log: 'Marcus opens the Hendricks deck and puts his phone beside the keyboard.',
+    teach: 'Click the desk once to start work. Marcus returns to it between tasks until noon.',
     do: { type: 'use', who: 'marcus', target: 'desk' },
     sets: ['hendricksDeck'],
   },
@@ -116,7 +113,13 @@ export const BEATS = [
     covers: ['p4', 'camp-pickup', 'p3'],
     objectives: ['Ask Jess to do the dishes', 'Pick Theo up from camp at three', 'Finish the Hendricks deck'],
     lines: [
-      { who: 'elena', text: 'Jess, the dishes. Both plates.' },
+      { who: 'elena', text: 'Is that the Hendricks thing again?' },
+      { who: 'marcus', text: 'It is fine. It is just restructuring.' },
+      { who: 'elena', text: 'You said that in April.' },
+      { who: 'marcus', text: 'Then it is still fine.' },
+
+      { who: 'elena', text: 'Ask Jess about the dishes. She does not listen to me.' },
+      { who: 'marcus', text: 'Jess, the dishes. Both plates.' },
       { who: 'jess', text: 'Sure. I will do them now. I will do them great.' },
       { who: 'elena', text: 'She has been in that room all morning.' },
     ],
@@ -350,7 +353,7 @@ export const BEATS = [
     id: 'p13', day: 0, at: 16 * 60,
     activeObjective: 2,
     covers: ['p3', 'p13', 'p14a'],
-    objectives: ['Finish the Hendricks deck', 'Get the laundry off the line', 'Watch the sky'],
+    objectives: ['Finish the Hendricks deck', 'Get the laundry off the line', 'Finish up around the house'],
     lines: [
       { who: 'pruitt', text: 'They said the grid was strained. Said it on the radio.' },
       { who: 'marcus', text: 'Strained how?' },
@@ -358,8 +361,8 @@ export const BEATS = [
       { who: 'marcus', text: 'It is not going to rain.' },
     ],
     log: 'There is a thunderhead sitting over the west end of the valley and it is not moving.',
-    teach: 'There is nothing to do but wait. The sky is worth a look.',
-    do: { type: 'wait', minutes: 45 },
+    teach: 'There are things to finish around the house before dinner.',
+    do: { type: 'wait', minutes: 0 },
     sets: ['gridStrained'],
   },
 

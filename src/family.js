@@ -279,6 +279,20 @@ export class Member {
     if (!this.autonomy || !this.canAct() || this.away || this.flags.wandered || this.watching) return;
     // Preserve children's explicit following/helping and their existing little brain.
     if (this.ai && (this.mode?.type === 'follow' && !this.mode.routine || this.task?.type === 'assist')) return;
+    // Once seated for work, Marcus returns between household tasks without another order.
+    const deskHours = sim.phase === 'prologue' && g.beats?.deskStarted && this.id === 'marcus'
+      && (sim.hour >= 8.5 && sim.hour < 12 || sim.day === 0 && sim.hour >= 13 && sim.hour < 17);
+    const deskWork = this.task || this.goal;
+    if (deskWork?.deskRoutine && !deskHours) this.stopTask(true);
+    if (deskHours && (!deskWork || deskWork.autonomous) && !this.path.length
+      && this.needs.hydration >= 60 && this.needs.food >= 25 && this.needs.energy >= 15) {
+      if (!deskWork?.deskRoutine) {
+        this.stopTask(true);
+        this.useObject(g.beats.targets.desk, 'routine', { autonomous: true, deskRoutine: true,
+          label: 'working at the desk', duration: (sim.hour < 12 ? 720 : 1020) - sim.hour * 60 });
+      }
+      return;
+    }
     if (this.waitingForAutonomy) return;
     const work = this.task || this.goal;
     if (work && !work.autonomous || !work && this.path.length) return;
@@ -823,19 +837,28 @@ export class Member {
   // One message each time a line is crossed; re-arms after recovery.
   alerts() {
     const n = this.needs, f = this.flags, g = this.game, pct = this.pct;
-    const say = (key, cond, reset, msg, kind = 'warn') => {
-      if (cond && !f['a_' + key]) { f['a_' + key] = true; g.log(msg, kind); }
-      else if (reset && f['a_' + key]) f['a_' + key] = false;
+    // speech says what is actually spoken, so the line can float over the speaker's head.
+    // The log keeps the whole sentence either way; narration passes no speech and stays log only.
+    const say = (key, cond, reset, msg, kind = 'warn', speech = null) => {
+      if (cond && !f['a_' + key]) {
+        f['a_' + key] = true; g.log(msg, kind);
+        if (speech) g.bubbles?.say(speech.who, speech.text);
+      } else if (reset && f['a_' + key]) f['a_' + key] = false;
     };
     const kid = this.child;
-    say('thirsty', pct > 1.2, pct < 0.6, kid ? `Theo: "I'm thirsty. Can I have water?"` : this.teen ? `Jess: "Is there any water that isn't warm?"` : `${this.name} is thirsty.`);
+    const thirst = kid ? "I'm thirsty. Can I have water?" : this.teen ? "Is there any water that isn't warm?" : null;
+    say('thirsty', pct > 1.2, pct < 0.6, thirst ? `${this.name}: "${thirst}"` : `${this.name} is thirsty.`, 'warn',
+      thirst ? { who: this.id, text: thirst } : null);
     say('dehyd', pct > 2.5, pct < 1.5, kid ? `Theo has stopped asking for water. He's quiet, lips cracked. That's worse.` : `${this.name} is dehydrated: headache, dark urine, slow.`, 'bad');
     say('severe', pct > 4.5, pct < 3.5, `${this.name} is severely dehydrated: dizzy, confused, barely sweating.`, 'bad');
     say('hot', this.bodyT >= EXHAUSTION_F, this.bodyT < 100.2, kid ? `Theo is flushed and limp. He's overheating, fast. Kids heat up quicker than adults.` : `${this.name} has heat exhaustion: pounding head, nausea, cramping.`, 'bad');
-    say('hungry', n.food < 25, n.food > 40, kid ? `Theo: "My stomach hurts. When's breakfast?"` : `${this.name} is hungry.`);
+    const hungry = kid ? "My stomach hurts. When's breakfast?" : null;
+    say('hungry', n.food < 25, n.food > 40, hungry ? `${this.name}: "${hungry}"` : `${this.name} is hungry.`, 'warn',
+      hungry ? { who: this.id, text: hungry } : null);
     say('tired', n.energy < 20, n.energy > 40, `${this.name} can barely keep ${this.his} eyes open.`);
     if (kid) {
-      say('alone', f.alone && n.morale < 50, !f.alone, `Theo: "Mom? Dad? Where are you?" He doesn't like being alone in this.`);
+      say('alone', f.alone && n.morale < 50, !f.alone, `Theo: "Mom? Dad? Where are you?" He doesn't like being alone in this.`, 'warn',
+        { who: this.id, text: 'Mom? Dad? Where are you?' });
       say('crying', n.morale < 25, n.morale > 35, `Theo is crying and won't stop. Everyone can hear it.`, 'bad');
     }
     if (this.teen) say('sullen', n.morale < 35, n.morale > 45, `Jess has gone quiet and sharp. She's scared and angry about it.`);
