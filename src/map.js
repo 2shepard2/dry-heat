@@ -163,6 +163,9 @@ export function buildMap() {
     },
     // Walkable cells next to an object (4-neighbours), where someone stands to use it.
     useCells(o) {
+      // Bedroom panes are fitted from the clear aisle beside the bed frames.
+      // Moving mattresses leaves those frames in place; do not path through them.
+      if (o.accessCells) return o.accessCells.filter(([x, y]) => map.walkable(x, y));
       const out = [];
       for (const [x, y] of map.objCells(o)) {
         for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
@@ -175,12 +178,13 @@ export function buildMap() {
   };
   map.home = lots.find((l) => l.home);
   map.tub = objects.find((o) => o.kind === 'tub' && o.home);
-  // Interaction sites use existing walkable neighbours without changing collision cells.
+  // Interaction sites use walkable neighbours or authored bedroom aisle cells, preserving collisions.
   // West / south windows remain walls; main adds low, clickable panes and finished panels.
   map.sites = [
     { key: 'west-bedroom', kind: 'window', name: 'West bedroom window', x: 22, y: 7, axis: 'west' },
-    { key: 'west-front-bedroom', kind: 'window', name: 'West front bedroom window', x: 22, y: 14, axis: 'west' },
-    { key: 'south-bedroom', kind: 'window', name: 'South bedroom window', x: 24, y: 15, axis: 'south' },
+    // Align this pane with the upper aisle so the work spot is within the 3 m completion radius.
+    { key: 'west-front-bedroom', kind: 'window', name: 'West front bedroom window', x: 22, y: 13, axis: 'west', accessCells: [[25, 13]] },
+    { key: 'south-bedroom', kind: 'window', name: 'South bedroom window', x: 24, y: 15, axis: 'south', accessCells: [[25, 14], [25, 13]] },
     { key: 'south-living', kind: 'window', name: 'South living window', x: 30, y: 15, axis: 'south' },
     { key: 'tarp', kind: 'tarp', name: 'Yard shade posts', x: 28, y: 3 },
     { key: 'grill', kind: 'grill', name: 'Yard grill', x: 33, y: 3 },

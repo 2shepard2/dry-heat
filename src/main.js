@@ -11,7 +11,7 @@ import { NightEvents } from './events.js';
 import { SurvivalSystems } from './systems.js';
 import { Member, FAMILY } from './family.js';
 import { nearbyWalkable } from './path.js';
-import { UI } from './ui.js';
+import { UI, personClick } from './ui.js';
 import { makeRng } from './rng.js';
 import {
   ITEMS, PER_L, capOf, entryKg, invKg, isLiquid, refillable, addEntry, isSpoiled, rollLoot, label, takeOne, openerIn, itemHint,
@@ -124,6 +124,14 @@ const game = {
     if (m) select(m, add);
   },
   focusOn(m) { if (m) cam.target.set(m.pos.x, 0, m.pos.z); },
+  // First click selects a parent / focuses a kid; a second click on the same person opens the panel; again closes it.
+  clickPerson(m, shift) {
+    const r = personClick({ picked: game.pickedMember, detail: game.detailMember, selected: game.selected }, m, shift);
+    game.pickedMember = r.picked; game.detailMember = r.detail;
+    if (r.act === 'select') select(m, shift);
+    else if (r.act === 'focus') game.focusOn(m);
+    return r;
+  },
 
   // Light records own their item until it is switched off or picked up. Four
   // reusable, shadow-free GPU lights keep shader cost bounded on laptops.
@@ -621,7 +629,7 @@ marker.userData.t = 0;
 scene.add(marker);
 function select(m, add) {
   if (m.dead || m.away) return;
-  game.detailMember = m;
+  if (game.detailMember) game.detailMember = m; // an open panel follows the selection
   if (m.ai) return; // inspecting children never gives direct movement control
   if (add) {
     game.selected = game.selected.includes(m) ? game.selected.filter((x) => x !== m) : [...game.selected, m];
@@ -803,9 +811,13 @@ renderer.domElement.addEventListener('pointerdown', (ev) => {
   if (ev.button !== 0) return;
   if (p.member) {
     const helpers = game.selected.filter((m) => m !== p.member && m.canAct());
-    game.detailMember = p.member;
-    if (p.member.ai || ((p.member.collapsed || p.member.dead) && helpers.length)) memberMenu(p.member, ev.clientX, ev.clientY);
-    else select(p.member, ev.shiftKey);
+    if ((p.member.collapsed || p.member.dead) && helpers.length) memberMenu(p.member, ev.clientX, ev.clientY);
+    else {
+      // two-click people: select/focus, then the panel. Kids are directed by orders, so their first
+      // click also opens the order menu (the prologue teaches "Click Theo, then choose ...").
+      const r = game.clickPerson(p.member, ev.shiftKey);
+      if (p.member.ai && r.act === 'focus') memberMenu(p.member, ev.clientX, ev.clientY);
+    }
   } else if (p.obj) objectMenu(p.obj, ev.clientX, ev.clientY);
   else if (p.cell && game.selected.length && !game.hintedMove) { game.hintedMove = true; game.log('To walk: right-click (two-finger tap) where you want them to go.'); }
 });
@@ -839,7 +851,7 @@ addEventListener('keydown', (e) => {
   if (k === 'z' && sim.phase === 'prologue' && game.beats.sleep()) return;
   if (k === 'z') for (const m of game.selected) if (m.canAct()) { m.stopTask(true); m.goal = { type: 'sleep', obj: null }; m.startTask(); }
   if (k === 'f') game.focusOn(game.selected[0]);
-  if (k === 'escape') { for (const m of game.selected) game.opens.delete(m); game.detailMember = null; game.selected = []; ui.hideMenu(); }
+  if (k === 'escape') { for (const m of game.selected) game.opens.delete(m); game.detailMember = null; game.pickedMember = null; game.selected = []; ui.hideMenu(); }
   if (k === '+' || k === '=') { cam.zoom = Math.min(4.5, cam.zoom * 1.15); placeCamera(); }
   if (k === '-') { cam.zoom = Math.max(0.7, cam.zoom / 1.15); placeCamera(); }
 });
@@ -1023,6 +1035,7 @@ function installBuildSites() {
   game.prologueVisual = prologueScene(game, scene, cam);
   game.bubbles = createBubbles(game, { camera, renderer });
   game.beats = new Prologue(game, {
+    outageObjectives,
     present(choice) {
       let card = $('#beat-choice');
       if (!card) { card = document.createElement('div'); card.id = 'beat-choice'; document.body.appendChild(card); }
@@ -1038,7 +1051,6 @@ function installBuildSites() {
     },
     aurora: (on, beat) => { game.auroraOn = on; game.prologueVisual.set(on, beat); },
     cut() {
-      game.objectives = outageObjectives.map((o) => ({ ...o }));
       game.cutting = true;
       const fade = document.createElement('div'); fade.id = 'outage-cut'; fade.textContent = '5:40 AM'; document.body.appendChild(fade);
       requestAnimationFrame(() => fade.classList.add('black'));

@@ -35,9 +35,10 @@ export function mapBeatTargets(map) {
 }
 
 export class Prologue {
-  constructor(game, { beats = BEATS, chores = CHORES, targets = mapBeatTargets(game.map), present = () => {}, aurora = () => {}, cut = () => {} } = {}) {
+  constructor(game, { beats = BEATS, chores = CHORES, targets = mapBeatTargets(game.map), outageObjectives = game.objectives || [], present = () => {}, aurora = () => {}, cut = () => {} } = {}) {
     this.g = game; this.beats = beats; this.chores = chores;
-    this.doneChores = new Set(); this.choreLines = []; this.choreDelay = 0; this.targets = targets;
+    this.outageObjectives = outageObjectives.map((o) => ({ ...o }));
+    this.doneChores = new Set(); this.choreHintTime = 0; this.choreLines = []; this.choreDelay = 0; this.targets = targets;
     this.present = present; this.aurora = aurora; this.cut = cut;
     this.index = -1; this.current = null; this.seenHints = new Set(); this.completed = new Set();
     this.lines = []; this.lineDelay = 0; this.pending = false; this.trip = null;
@@ -51,7 +52,7 @@ export class Prologue {
     game.skipToOutage = () => this.outage(true);
     game.readDecisions = () => ({ ...game.decisions });
   }
-  get paused() { return this.choiceReady && !this.pending && !this.thenStarted && !this.trip && !this.boarding && !this.current?.optional; }
+  get paused() { return this.choiceReady && !this.pending && !this.thenStarted && (!this.trip || this.trip.atDestination) && !this.boarding && !this.current?.optional; }
   // A hurry belongs to one quiet wait or task, never to the following prompt.
   skipContext() {
     if (this.g.sim.phase !== 'prologue' || !this.current || this.pending || this.boarding || this.lines.length || this.lineDelay > 1e-8 || this.choiceReady) return null;
@@ -92,6 +93,14 @@ export class Prologue {
       && now >= (c.day - 1) * 1440 + c.from && now < (c.day - 1) * 1440 + c.to)
       .sort((a, b) => a.to - b.to || a.id.localeCompare(b.id));
   }
+  // Cycle pages independently of story state, so an unfinished early chore
+  // cannot hide later offers throughout their entire window.
+  choreHints() {
+    const offered = this.offeredChores();
+    if (offered.length <= 2) return offered;
+    const start = (Math.floor(this.choreHintTime / 12) * 2) % offered.length;
+    return [offered[start], offered[(start + 1) % offered.length]];
+  }
   interactChore(id, members = this.g.selected) {
     const c = this.offeredChores().find((c) => c.id === id);
     if (!c || !members.some((m) => !m.ai && !m.away && m.canAct())) return false;
@@ -122,6 +131,7 @@ export class Prologue {
     return true;
   }
   updateChores(dtReal) {
+    this.choreHintTime += dtReal;
     const offered = new Set(this.offeredChores().map((c) => c.id));
     for (const m of this.g.family) {
       const work = m.task || m.goal;
@@ -158,8 +168,9 @@ export class Prologue {
     this.g.sim.prologueDay = b.day;
     this.startedAt = this.g.sim.min;
     this.refreshObjectives();
-    this.lines = [...(b.lines || [])]; this.lineDelay = 0;
-    if (b.log) this.g.log(b.log);
+    this.beforeDone = !b.before; this.beforeStarted = false;
+    this.lines = [...(b.before ? b.before.lines || [] : b.lines || [])]; this.lineDelay = 0;
+    if (b.log && this.beforeDone) this.g.log(b.log);
     if (b.teach && !this.seenHints.has(b.teach)) { this.seenHints.add(b.teach); this.g.log(b.teach, 'hint'); }
     this.aurora(b.id === 'p14a', b);
     this.showChoice();
@@ -190,8 +201,16 @@ export class Prologue {
     this.updateChores(dtReal);
     this.updateAbsences();
     if (this.trip && this.g.sim.min >= this.trip.until) {
-      const background = this.trip.background; this.restoreTrip();
-      if (!background) this.pending = true;
+      if (this.trip.before) {
+        // Outbound travel ends at the shop, with crew/car still off map.
+        this.trip.before = false; this.trip.atDestination = true; this.trip.until = Infinity;
+        this.beforeDone = true; this.elapsed = 0;
+        this.lines = [...(this.current.lines || [])]; this.lineDelay = 0;
+        if (this.current.log) this.g.log(this.current.log);
+      } else {
+        const background = this.trip.background; this.restoreTrip();
+        if (!background) this.pending = true;
+      }
     }
     if (!this.current) return;
     if (this.waiting) {
@@ -204,13 +223,20 @@ export class Prologue {
     const b = this.current, d = b.do || { type: 'wait', minutes: 0 };
     this.elapsed += dtMin;
     if (this.boarding) this.updateBoarding();
+    if (!this.beforeDone) {
+      if (!this.beforeStarted && !this.lines.length && this.lineDelay <= 1e-8) {
+        this.beforeStarted = true; this.queueTrip({ ...b.before, before: true });
+      }
+      return;
+    }
     if (d.target === 'desk' && this.deskStarted && this.g.sim.hour >= 12) this.pending = true;
     if (d.type === 'wait' && this.elapsed >= (d.minutes || 0)) this.pending = true;
     if (d.type === 'walk') {
       const o = this.targets[d.target];
       if (this.g.family.some((m) => (!d.who || m.id === d.who) && !m.autonomousLocation && !m.task?.autonomous && !m.goal?.autonomous && !m.away && Math.hypot(m.pos.x - o.x - 0.5, m.pos.z - o.y - 0.5) < 2)) this.pending = true;
     }
-    if (this.pending && b.then && !this.thenStarted) {
+    if (this.pending && b.then && !this.thenStarted
+      && (!this.trip?.atDestination || (!this.lines.length && this.lineDelay <= 1e-8))) {
       this.thenStarted = true; this.pending = false; this.queueTrip(b.then);
     }
     if (b.optional && !this.trip && !this.boarding && this.elapsed >= (b.timeout ?? 30)) { this.restoreTrip(); this.pending = true; }
@@ -237,7 +263,7 @@ export class Prologue {
   // Main uses these same actions for furniture menus and child orders.
   interact(target, members = this.g.selected) {
     const d = this.current?.do, o = this.targets[target];
-    if (!d || this.waiting || this.boarding || (this.trip && !this.trip.background) || this.pending || !o || (d.target !== target && !(d.type === 'trip' && target === 'car'))) return false;
+    if (!d || !this.beforeDone || this.waiting || this.boarding || (this.trip && !this.trip.background) || this.pending || !o || (d.target !== target && !(d.type === 'trip' && target === 'car'))) return false;
     if (d.type === 'trip') return this.queueTrip(d);
     if (d.type === 'walk') return members.filter((m) => !d.who || m.id === d.who).map((m) => m.useObject(o, 'prologue', { beatType: 'walk', target })).some(Boolean);
     if (!['use', 'order', 'together'].includes(d.type)) return false;
@@ -252,7 +278,7 @@ export class Prologue {
     }).some(Boolean);
   }
   showChoice() {
-    if (this.current?.do?.type === 'choice' && !this.waiting && !this.pending && !this.choiceReady && !this.lines.length && this.lineDelay <= 1e-8) {
+    if (this.current?.do?.type === 'choice' && this.beforeDone && !this.waiting && !this.pending && !this.choiceReady && !this.lines.length && this.lineDelay <= 1e-8) {
       this.choiceReady = true; this.present(this.current.do);
     }
   }
@@ -268,14 +294,12 @@ export class Prologue {
       this.todos.set(text, o); return o;
     });
     for (const o of this.todos.values()) o.done = this.completed.has(o.coveredBy);
-    const offered = new Set(this.offeredChores());
-    this.g.objectives = [...current, ...[...this.todos.values()].filter((o) => !current.includes(o)),
-      ...this.chores.filter((c) => c.day === this.g.sim.day && (this.doneChores.has(c.id) || offered.has(c)))
-        .map((c) => ({ id: c.id, text: c.label, prologue: true, optional: true, current: false, done: this.doneChores.has(c.id) }))];
+    this.g.objectives = [...current, ...[...this.todos.values()].filter((o) => !current.includes(o))];
   }
   guidance() {
     const b = this.current, d = b?.do;
-    if (!d) return null;
+    if (this.g.sim.phase !== 'prologue') return null;
+    if (!d) return { text: 'Free time', target: null, crew: [], chores: this.choreHints(), canSkip: false };
     const name = (id) => this.g.family.find((m) => m.id === id)?.name || id;
     const o = this.targets[d.target];
     let target = d.type === 'order' ? this.g.family.find((m) => m.id === d.kid) : o;
@@ -292,17 +316,26 @@ export class Prologue {
       : `${(d.who && !Array.isArray(d.who) ? [d.who] : crew).map(name).join(' and ')}: ${actions[d.target] || `${d.type === 'walk' ? 'walk to' : d.type === 'together' || d.type === 'trip' ? 'drive to' : 'use'} ${o?.name || d.target}`}`;
     if (d.type === 'sleep') target = this.targets.beds;
     if (d.type === 'together' || d.type === 'trip') target = this.targets.car;
-    if (this.waiting) text = `Free time until ${this.clockAt(b.at)} — next: ${text}`;
+    if (!this.beforeDone && b.before) { target = this.targets.car; text = 'Get ready to drive to ' + (this.targets[b.before.target]?.name || b.before.target); }
+    if (this.waiting) { target = null; text = `Free time until ${this.clockAt(b.at)}`; }
     if (this.pending && !this.trip && !this.boarding) { target = null; text = 'Done. Listening in…'; }
     if (this.boarding) { target = this.targets.car; text = 'Getting in the car — the family will drive away together'; }
-    if (this.trip && !this.trip.background) { target = null; text = `${this.trip.label} — back around ${this.clockAt(this.trip.until)}; wait for them to return`; }
-    return { text, target, crew, chores: this.offeredChores().slice(0, 2), canSkip: !!this.skipContext() && !this.hurry };
+    if (this.trip?.atDestination) target = null;
+    else if (this.trip && !this.trip.background) { target = null; text = `${this.trip.label} — back around ${this.clockAt(this.trip.until)}; wait for them to return`; }
+    return { text, target, crew, chores: this.choreHints(), canSkip: !!this.skipContext() && !this.hurry };
   }
   clockAt(minute) {
     const local = (minute % 1440 + 1440) % 1440, h = Math.floor(local / 60);
     return `${(h + 11) % 12 + 1}:${String(Math.floor(local % 60)).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
   }
   queueTrip(d) {
+    if (this.trip?.atDestination) {
+      this.trip.atDestination = false;
+      this.trip.until = this.g.sim.min + (d.minutes || 0);
+      this.trip.label = d.label || 'Driving home';
+      this.g.log(this.trip.label);
+      return true;
+    }
     if (this.trip || this.boarding) return false;
     this.boarding = { data: d, arrived: new Set() };
     this.updateBoarding(); return true;
@@ -365,7 +398,7 @@ export class Prologue {
   depart(d) {
     if (this.trip) return false;
     const crew = d.who.map((id) => this.g.family.find((m) => m.id === id)).filter(Boolean);
-    this.trip = { crew, away: d.away, background: !!d.background, day: this.current.day, label: d.label || 'Trip',
+    this.trip = { crew, away: d.away, before: !!d.before, background: !!d.background, day: this.current.day, label: d.label || 'Trip',
       until: d.until !== undefined ? Math.max(this.g.sim.min + 1, (this.current.day - 1) * 1440 + d.until) : this.g.sim.min + (d.minutes || 0) };
     for (const m of crew) { m.stopTask(true); m.away = true; m.obj.visible = false; }
     this.setCarAway(true);
@@ -421,6 +454,7 @@ export class Prologue {
       // They slept the night in the AC: wake rested and fed, whatever the prologue clock did.
       Object.assign(m.needs, { energy: Math.max(m.needs.energy, 80), food: Math.max(m.needs.food, 70), hydration: Math.max(m.needs.hydration, 95) }); }
     g.sim.phase = 'outage'; g.sim.min = POWER_OUT_MIN; g.sim.indoor = 78;
+    g.objectives = this.outageObjectives.map((o) => ({ ...o }));
     applyDecisions(g);
     this.current = null; this.lines = []; this.choreLines = []; this.cut(); return true;
   }

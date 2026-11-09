@@ -23,6 +23,7 @@ const { SurvivalSystems } = await import('./systems.js');
 const { NightEvents } = await import('./events.js');
 const { flagsMatch } = await import('./conditions.js');
 const { Prologue, mapBeatTargets, beatMinute } = await import('./beats.js');
+const { CHORES } = await import('./data/chores.js');
 
 function fixture(decisions) {
   const messages = [];
@@ -353,15 +354,23 @@ test('fresh no-jump playthrough: all 18 beats, real paths/trips, clock, decision
     { walt: 'walked', jugs: 'shelf', cart: 'pharmacy', gas: 'full' },
     { walt: 'wavedOff', jugs: 'recycled', cart: 'birthday', gas: 'quarter' },
   ]) {
-    const { g, b, messages, m, e } = prologue();
+    const { g, b, messages, m, e } = prologue(undefined, CHORES);
     g.jumpBeat = () => assert.fail('playthrough must never jumpBeat');
     b.targets.car.mesh = { visible: true };
     let seconds = 0;
     const issued = new Set(), seenAway = new Set(), independentStalls = new Map();
-    const completedObjectives = new Set();
+    const completedObjectives = new Set(), hintedChores = new Set(), waitingChores = new Set();
     let campSeen = false, pickupSeen = false, fridayCampSeen = false;
     while (g.sim.phase === 'prologue' && seconds < 4000) {
       const beat = b.current, d = beat?.do;
+      assert.equal(g.sim.speed, 1);
+      const guide = b.guidance();
+      for (const c of guide?.chores || []) {
+        hintedChores.add(c.id);
+        if (b.waiting) waitingChores.add(c.id);
+        assert.ok(b.targets[c.do.target], `${c.id}: marker target`);
+      }
+      if (b.waiting) assert.equal(guide.target, null);
       if (beat && !b.waiting && !issued.has(beat.id)) {
         if (d.type === 'choice') {
           if (b.choiceReady) { assert.ok(g.pickChoice(picks[d.flag])); issued.add(beat.id); }
@@ -405,6 +414,8 @@ test('fresh no-jump playthrough: all 18 beats, real paths/trips, clock, decision
     assert.equal(g.sim.phase, 'outage', `timed out at ${b.current?.id}: ${g.sim.clock()}`);
     assert.ok(BEATS.every((beat) => b.completed.has(beat.id)));
     assert.equal(BEATS.length, 18);
+    assert.deepEqual(CHORES.filter((c) => !hintedChores.has(c.id)).map((c) => c.id), [], 'all real chores hinted in a full 1x run without completing any');
+    assert.ok(waitingChores.has('c-mail') && waitingChores.has('c-table'));
     assert.equal(g.sim.day, 1); assert.equal(g.sim.min, 340);
     assert.deepEqual(g.decisions, picks);
     assert.equal(g.systems.car.fuelL, picks.gas === 'full' ? 55 : 14);
@@ -659,13 +670,13 @@ const choreFixture = (extra = {}) => ({ id: 'c-test', day: -1, from: 435, to: 50
   who: 'elena', label: 'Put the lunch away', do: { type: 'use', target: 'fridge' }, minutes: 8, ...extra });
 const quietBeat = { id: 'quiet', day: -1, at: 435, do: { type: 'use', target: 'sink' } };
 
-test('chores open and expire silently, sort by deadline, and appear as dim optional objectives', () => {
+test('chores open and expire silently, sort by deadline, and stay out of objectives', () => {
   const chores = [choreFixture({ id: 'late', to: 550 }), choreFixture({ id: 'first' }),
     choreFixture({ id: 'second', to: 510 }), choreFixture({ id: 'future', from: 560, to: 600 })];
   const { g, b, m, messages } = prologue([quietBeat], chores);
   assert.deepEqual(b.offeredChores().map((c) => c.id), ['first', 'second', 'late']);
   assert.deepEqual(b.guidance().chores.map((c) => c.id), ['first', 'second']);
-  assert.ok(g.objectives.every((o) => o.optional && !o.current));
+  assert.deepEqual(g.objectives, []);
   assert.ok(b.interactChore('first', [m])); arrive(m);
   g.sim.min = -2880 + 550; b.update(0, 0);
   assert.equal(m.task, null); assert.deepEqual(b.offeredChores(), []);
@@ -685,7 +696,7 @@ test('chore completion waits for work, speaks, logs, reveals once and never comp
   e.updateTask(1); b.update(0, 0);
   assert.ok(b.doneChores.has(c.id)); assert.equal(b.current.id, 'quiet'); assert.equal(b.pending, false);
   assert.equal(b.completed.size, 0); assert.deepEqual(b.offeredChores(), []);
-  assert.ok(g.objectives.some((o) => o.optional && o.done));
+  assert.deepEqual(g.objectives, []);
   assert.deepEqual(messages, ['The drawer closes.', 'Elena: "There it is."']);
   assert.deepEqual(bubbled, [['elena', 'There it is.']]);
   assert.equal(b.targets.inhaler.items.filter((e) => e.id === 'flashlight').length, 1);
@@ -916,4 +927,230 @@ test('a spoken need line bubbles from the kid; narration stays in the log', () =
   theo.alerts();
   assert.equal(said.length, 2, 'narration gets no bubble');
   assert.ok(messages.some((m) => m.includes('Theo is crying')));
+});
+
+// Wave 4d-B regressions: exercise the interpreter and real Member/task paths.
+test('waiting beats hide every story marker until their scheduled minute', () => {
+  for (const action of [
+    { type: 'sleep' }, { type: 'use', target: 'coffee' },
+    { type: 'order', kid: 'jess', target: 'sink' },
+    { type: 'trip', who: ['marcus', 'elena'], target: 'store', minutes: 20 },
+  ]) {
+    const { g, b } = prologue([{ id: 'later', day: -1, at: 1320, do: action }]);
+    g.sim.min = -2880 + 1200; b.begin(b.current);
+    assert.equal(b.waiting, true);
+    assert.equal(b.guidance().target, null);
+    assert.equal(b.guidance().text, 'Free time until 10:00 PM');
+    g.sim.min = -2880 + 1320; b.update(0, 0);
+    assert.equal(b.waiting, false);
+    assert.ok(b.guidance().target, action.type);
+  }
+});
+
+test('overlapping chore hints rotate during waiting beats and free time, with marker targets', () => {
+  const chores = [0, 1, 2, 3, 4].map((i) => choreFixture({ id: `offer-${i}` }));
+  const { g, b } = prologue([{ ...quietBeat, at: 480 }], chores);
+  g.sim.min = -2880 + 435; b.begin(b.current);
+  assert.equal(b.waiting, true);
+  const seen = new Set();
+  for (let i = 0; i < 3; i++) {
+    const guide = b.guidance();
+    assert.equal(guide.target, null); assert.equal(guide.chores.length, 2);
+    for (const c of guide.chores) { seen.add(c.id); assert.ok(b.targets[c.do.target]); }
+    b.update(0, 12);
+  }
+  assert.equal(seen.size, chores.length);
+  b.current = null;
+  assert.equal(b.guidance().text, 'Free time');
+  assert.equal(b.guidance().chores.length, 2);
+  b.outage(); assert.equal(b.guidance(), null); assert.deepEqual(b.offeredChores(), []);
+});
+
+test('story objectives persist while offered, completed and expired chores never enter the list', () => {
+  const c = choreFixture();
+  const { g, b, m } = prologue([{ ...quietBeat, objectives: ['Wash the dishes'] }], [c]);
+  const story = g.objectives.map((o) => o.text);
+  assert.deepEqual(story, ['Wash the dishes']);
+  assert.equal(b.guidance().chores[0].id, c.id);
+  assert.ok(b.interactChore(c.id, [m])); finish(m); b.update(0, 0);
+  assert.ok(b.doneChores.has(c.id));
+  assert.deepEqual(g.objectives.map((o) => o.text), story);
+  g.sim.min = -2880 + 501; b.update(0, 0);
+  assert.deepEqual(g.objectives.map((o) => o.text), story);
+});
+
+test('Friday checkout follows outbound travel; every cart choice and reply stays away until drive home', async () => {
+  const { BEATS } = await import('./data/beats.js');
+  const checkout = BEATS.find((b) => b.id === 'p10');
+  for (const value of ['water', 'pharmacy', 'birthday']) {
+    const { g, b, m, e, messages } = prologue([checkout]);
+    b.targets.car.mesh = { visible: true };
+    const bubbles = []; g.bubbles = { say: (who, text) => bubbles.push({ who, text, away: g.family.find((m) => m.id === who)?.away }) };
+    assert.equal(b.choiceReady, false); assert.equal(b.pick(value), false);
+    assert.ok(!m.away && !e.away);
+    // Home conversation precedes boarding. No register lines before travel.
+    for (let i = 0; i < 100 && !b.boarding; i++) b.update(0, 1);
+    assert.ok(b.boarding);
+    assert.equal(messages.some((s) => s.includes('It was declined')), false);
+    finish(m); finish(e); b.update(0, 0);
+    assert.ok(b.trip?.before); assert.equal(b.paused, false);
+    assert.equal(b.targets.car.mesh.visible, false);
+    const departure = g.sim.min;
+    g.sim.step(checkout.before.minutes - 1); b.update(checkout.before.minutes - 1, 0);
+    assert.equal(b.choiceReady, false); assert.ok(b.trip.before);
+    assert.equal(messages.some((s) => s.includes('It was declined')), false);
+    g.sim.step(1); b.update(1, 0);
+    assert.equal(g.sim.min, departure + checkout.before.minutes);
+    assert.ok(b.trip.atDestination); assert.ok(m.away && e.away);
+    assert.ok(messages.some((s) => s.includes('It was declined')));
+    flushLines(b);
+    assert.equal(b.choiceReady, true); assert.equal(b.paused, true);
+    assert.equal(b.guidance().target, null);
+    // Leaving the card untouched never brings them home or auto-picks it.
+    for (let i = 0; i < 100; i++) b.update(0, 1);
+    assert.ok(b.trip.atDestination); assert.deepEqual(g.decisions, {});
+    assert.ok(b.pick(value));
+    b.update(0, 0);
+    assert.ok(b.trip.atDestination, 'option dialogue finishes at the register');
+    flushLines(b);
+    assert.equal(b.trip.atDestination, false);
+    assert.equal(b.thenStarted, true); assert.equal(b.paused, false);
+    assert.ok(m.away && e.away); assert.equal(b.targets.car.mesh.visible, false);
+    // All checkout and option speech from the parents occurs off map.
+    assert.ok(bubbles.filter((l) => l.text === 'It was declined.' || checkout.do.options.find((o) => o.value === value).lines.some((o) => o.text === l.text)).every((l) => l.away));
+    g.sim.step(checkout.then.minutes - 1); b.update(checkout.then.minutes - 1, 0);
+    assert.ok(b.trip); assert.ok(m.away && e.away);
+    g.sim.step(1); b.update(1, 0);
+    assert.equal(b.trip, null); assert.ok(b.completed.has('p10'));
+    assert.ok(!m.away && !e.away); assert.equal(b.targets.car.mesh.visible, true);
+    assert.equal(g.decisions.cart, value);
+  }
+});
+
+test('every shade job walks from home to an indoor work spot with default furniture and moved mattresses', () => {
+  for (const moved of [false, true]) {
+    const { g, s, m } = fixture();
+    if (moved) {
+      // Same collision mutation as main.placeMattress: old bed frames stay solid;
+      // four new mattresses occupy the living-room floor.
+      for (const o of g.map.objects) if (o.home && o.kind === 'bed') { o.kind = 'frame'; o.name = 'Bare bed frame'; }
+      for (const [x, y] of [[31, 12], [32, 12], [31, 13], [32, 13]]) {
+        const id = g.map.objects.length, i = g.map.idx(x, y);
+        g.map.objects.push({ id, x, y, w: 1, h: 1, kind: 'bed', home: true, together: true, floor: g.map.type[i], items: [] });
+        g.map.objAt[i] = id; g.map.type[i] = 13;
+      }
+    }
+    for (const site of g.map.sites.filter((o) => o.kind === 'window')) {
+      m.stopTask(true); m.pos.set(29.5, 0, 12.5);
+      give(m, 'aluminum_foil');
+      assert.ok(g.shadeWindow(m, site.key), `${site.key}, mattresses moved: ${moved}`);
+      const route = [...m.path];
+      assert.ok(route.length > 0);
+      assert.ok(route.every(([x, y]) => g.map.walkable(x, y) && g.map.isIndoor(x, y) && !g.map.isGarage(x, y)), site.key);
+      for (let i = 0; i < 1000 && !s.shades.has(site.key); i++) m.update(.1, .1);
+      assert.ok(s.shades.has(site.key), `finished ${site.key}: ${JSON.stringify({ pos: m.cell(), task: m.task?.type, goal: m.goal?.type, path: m.path, inv: m.inv.map((e) => e.id) })}`);
+      assert.ok(g.map.isIndoor(...m.cell()));
+    }
+    assert.equal(s.shades.size, 4);
+  }
+});
+
+test('outage objectives exist synchronously at the day-one cut for normal and skipped prologues', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('./main.js', import.meta.url), 'utf8');
+  // Exercise the actual boot objective data without booting WebGL/DOM in Node.
+  const objectives = Function('return ' + source.match(/objectives:\s*(\[[\s\S]*?\n  \]),/)[1])();
+  assert.match(source, /new Prologue\(game,\s*\{\s*outageObjectives,/);
+  for (const skip of [false, true]) {
+    const { g } = fixture(); g.sim = new Sim({ phase: 'prologue' });
+    let cutSeen = false;
+    const b = new Prologue(g, { beats: [{ id: 'last', day: 0, at: 1400, outage: true, do: { type: 'wait', minutes: 0 } }],
+      outageObjectives: objectives,
+      cut: () => {
+        cutSeen = true;
+        assert.equal(g.sim.phase, 'outage'); assert.equal(g.sim.day, 1); assert.equal(g.sim.min, 340);
+        assert.deepEqual(g.objectives, objectives);
+        assert.ok(g.objectives.every((o) => !o.done && !o.prologue));
+      } });
+    if (skip) b.outage(true);
+    else { g.sim.min = -1440 + 1400; b.start(); b.update(0, 0); }
+    assert.equal(cutSeen, true);
+    b.update(1, 1); assert.deepEqual(g.objectives, objectives);
+    g.objectives[0].done = true; assert.equal(objectives[0].done, undefined);
+  }
+  assert.deepEqual(objectives.map((o) => o.id), ['tub', 'look', 'shade', 'solar', 'night']);
+});
+
+test('autonomous task and walking labels omit the own callout for both parents', () => {
+  const { m, e } = fixture();
+  for (const member of [m, e]) {
+    member.task = { type: 'routine', autonomous: true, label: 'Reading' };
+    assert.equal(member.doing(), 'Reading');
+    assert.equal(member.task.autonomous, true);
+    member.task = null; member.goal = { type: 'routine', autonomous: true, label: 'the couch' };
+    assert.equal(member.doing(), 'Going to the couch');
+    assert.equal(member.goal.autonomous, true);
+  }
+});
+
+// ---- Wave 4d: HUD logic (two-click people, task panel, clock card)
+const { personClick, taskModel, dateShort } = await import('./ui.js');
+
+test('two-click people: parents select, then open, then close', () => {
+  const marcus = { id: 'marcus', ai: false }, st = { picked: null, detail: null, selected: [] };
+  let r = personClick(st, marcus);
+  assert.deepEqual([r.act, r.detail], ['select', null]);
+  Object.assign(st, { picked: r.picked, detail: r.detail, selected: [marcus] });
+  r = personClick(st, marcus);
+  assert.deepEqual([r.act, r.detail], ['open', marcus]);
+  Object.assign(st, { picked: r.picked, detail: r.detail });
+  r = personClick(st, marcus);
+  assert.deepEqual([r.act, r.detail], ['close', null]);
+});
+
+test('two-click people: kids focus first, panel on the second click; switching person resets', () => {
+  const jess = { id: 'jess', ai: true }, theo = { id: 'theo', ai: true }, st = { picked: null, detail: null, selected: [] };
+  let r = personClick(st, jess);
+  assert.deepEqual([r.act, r.detail], ['focus', null]);
+  Object.assign(st, r);
+  r = personClick(st, theo); // a different person: first click again, panel stays closed
+  assert.deepEqual([r.act, r.detail], ['focus', null]);
+  Object.assign(st, r);
+  r = personClick(st, theo);
+  assert.equal(r.act, 'open'); assert.equal(r.detail, theo);
+  Object.assign(st, r);
+  r = personClick(st, jess); // another person while a panel is open closes it and focuses
+  assert.deepEqual([r.act, r.detail], ['focus', null]);
+});
+
+test('two-click people: a deselected parent needs a fresh first click; shift adds', () => {
+  const marcus = { id: 'marcus', ai: false }, elena = { id: 'elena', ai: false };
+  const r = personClick({ picked: marcus, detail: null, selected: [elena] }, marcus);
+  assert.equal(r.act, 'select');
+  assert.equal(personClick({ picked: null, detail: null, selected: [marcus] }, elena, true).act, 'select');
+});
+
+test('task panel: 4 open, 2 Also, done items collapse behind a count', () => {
+  const objs = [1, 2, 3, 4, 5, 6].map((n) => ({ id: 'o' + n, text: 'Task ' + n, done: n > 4 }))
+    .concat([{ id: 'c', text: 'chore', optional: true }, { id: 'o7', text: 'Task 7' }, { id: 'o8', text: 'Task 8' }]);
+  const guide = { text: 'x', chores: [{ label: 'a' }, { label: 'b' }, { label: 'c' }] };
+  const m = taskModel(objs, guide);
+  assert.equal(m.open.length, 4); assert.equal(m.hidden, 2); // tasks 1-4, 7, 8 are open; chores never listed
+  assert.equal(m.done.length, 2); assert.equal(m.doneOpen, false);
+  assert.equal(m.also.length, 2);
+  assert.equal(taskModel(objs, null, true).doneOpen, true);
+  assert.equal(taskModel([{ text: 'a' }], null, true).doneOpen, false);
+  assert.equal(taskModel(objs.slice(0, 4), null).open.length, 4);
+});
+
+test('outage task list is never empty-by-CSS: model lists open items with no guidance', () => {
+  const m = taskModel([{ id: 'tub', text: 'Fill the bathtub' }, { id: 'look', text: 'Search the house' }], null);
+  assert.deepEqual(m.open.map((o) => o.id), ['tub', 'look']);
+  assert.equal(m.also.length, 0);
+});
+
+test('clock card date labels', () => {
+  assert.equal(dateShort('Thursday, July 9'), 'Thu · July 9');
+  assert.equal(dateShort('Day 1 · Saturday, July 11'), 'Day 1 · Sat · July 11');
+  assert.equal(dateShort('Day 4 · Tuesday, July 14'), 'Day 4 · Tue · July 14');
 });

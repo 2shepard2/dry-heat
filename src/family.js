@@ -902,8 +902,8 @@ export class Member {
     if (this.collapsed) return 'Unconscious';
     if (this.isWatching()) return 'Keeping watch';
     if (this.flags.wandered) return 'In the back yard: needs fetching';
-    if (t?.autonomous) return `${t.label || (this.asleep ? 'sleeping' : 'taking care of things')} (on ${this.his} own)`;
-    if (this.goal?.autonomous) return `Going to ${this.goal.label || 'rest'} (on ${this.his} own)`;
+    if (t?.autonomous) return t.label || (this.asleep ? 'sleeping' : 'taking care of things');
+    if (this.goal?.autonomous) return `Going to ${this.goal.label || 'rest'}`;
     if (t) {
       const o = t.obj ? t.obj.name.toLowerCase() : '';
       return {

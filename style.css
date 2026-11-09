@@ -19,17 +19,6 @@ button:disabled { opacity: 0.45; cursor: default; }
 .warn { color: var(--warn); } .bad { color: var(--bad); } .good { color: var(--good); } .ok { color: var(--dim); }
 
 #hud > div { position: fixed; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
-#top { top: 10px; left: 256px; right: 290px; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; padding: 6px 12px; }
-#clock { font-size: 15px; font-variant-numeric: tabular-nums; }
-#speed button { padding: 2px 8px; margin: 0 1px; }
-#speed button.on { background: #5a4a30; border-color: var(--sel); }
-#env { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; }
-#env span { font-variant-numeric: tabular-nums; }
-
-#objectives { top: 116px; left: 256px; right: 290px; padding: 5px 12px; font-size: 12px; color: var(--dim); display: flex; flex-wrap: wrap; gap: 4px 14px; }
-#objectives .done { color: var(--good); text-decoration: line-through; }
-#objectives .failed { color: var(--bad); }
-
 #family { top: 10px; left: 10px; width: 236px; padding: 6px; max-height: calc(100vh - 230px); overflow-y: auto; }
 .card { padding: 6px 7px; border: 1px solid transparent; border-radius: 5px; margin-bottom: 4px; cursor: pointer; }
 .card:hover { background: rgba(255, 255, 255, 0.04); }
@@ -97,11 +86,6 @@ button:disabled { opacity: 0.45; cursor: default; }
 .equipment { color: var(--dim); font-size: 11px; margin: 3px 0; }
 .equipment-control { width: 100%; margin: 3px 0 7px; text-align: left; font-size: 12px; }
 
-@media (max-width: 1100px) {
-  #top, #objectives { left: 256px; right: 10px; }
-  #side { top: 235px; max-height: calc(100vh - 245px); }
-  #objectives { top: 122px; }
-}
 
 #beat-choice { position: fixed; inset: 0; z-index: 25; display: grid; place-items: center; background: #090e1680; }
 #beat-choice .box { width: min(420px, 86vw); padding: 24px; background: #222a2d; border: 1px solid #788782; box-shadow: 0 12px 60px #0009; color: #f0ebdf; }
@@ -109,23 +93,36 @@ button:disabled { opacity: 0.45; cursor: default; }
 #outage-cut { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: #000; color: #eee8dc; font: 32px Georgia, serif; letter-spacing: .12em; opacity: 0; pointer-events: all; transition: opacity 1.1s ease; }
 #outage-cut.black { opacity: 1; }
 
-#objectives .later { opacity: .65; }
-#objectives .current { color: var(--text); }
-#objectives .now { flex-basis: 100%; color: #fff4ce; border: 1px solid #f4ca6b; background: #29271f; padding: 8px; text-align: left; font-size: 13px; }
-#objectives .now span { white-space: nowrap; color: #ffcf68; text-decoration: underline; }
 #menu button.beat-action { border-left: 4px solid #ffcf68; background: #49402b; color: #fff4ce; }
 #beat-choice button { background: #2b2622; border: 1px solid #b0a38e; color: var(--text); }
 #beat-choice button:hover { background: #3a332c; }
 #beat-choice button:focus-visible { outline: 2px solid var(--sel); outline-offset: 2px; }
-#objectives .todo-list { display: flex; flex-wrap: wrap; gap: 4px 14px; max-height: 100px; overflow-y: auto; width: 100%; }
 
-/* Wave 4: edge HUD; the central view stays open. */
-#top { top: 8px; left: 10px; right: 10px; padding: 5px 10px; }
-#clock { font-size: 13px; }
-#env { font-size: 11px; }
-#objectives { top: 76px; left: 10px; right: auto; width: min(610px, calc(100vw - 320px)); padding: 5px; }
-#objectives .todo-list { display: none; }
-#objectives .now { margin: 0; }
+/* Wave 4d: the world is the picture. Clock card + speed row + task panel top left, House chip beside it, log top right. */
+#hud > #stack { top: 10px; left: 10px; width: 206px; background: none; border: 0; border-radius: 0; display: flex; flex-direction: column; gap: 4px; }
+#clock { background: var(--panel); border: 1px solid var(--line); border-radius: 6px 6px 0 0; padding: 6px 10px 7px; text-align: center; font-variant-numeric: tabular-nums; }
+#clock .cal { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); border-bottom: 1px solid var(--line); padding-bottom: 3px; }
+#clock .time { font-size: 27px; line-height: 1.15; margin: 3px 0 1px; font-weight: 300; }
+#clock .temps { font-size: 12px; color: var(--dim); }
+#stack { gap: 0 !important; }
+#speed { display: flex; background: var(--panel); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 6px 6px; padding: 3px; gap: 3px; }
+#speed button { flex: 1; padding: 2px 0; font-size: 10px; letter-spacing: -0.1em; }
+#speed button.on { background: #5a4a30; border-color: var(--sel); }
+#objectives { margin-top: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; font-size: 11px; color: var(--dim); display: flex; flex-direction: column; gap: 3px; }
+#objectives:empty { display: none; }
+#objectives .todo-list { display: flex; flex-direction: column; gap: 2px; }
+#objectives .todo-list:empty { display: none; }
+#objectives .done { color: var(--good); text-decoration: line-through; }
+#objectives .failed { color: var(--bad); }
+#objectives .later { opacity: .7; }
+#objectives .current { color: var(--text); }
+#objectives .now { color: #fff4ce; border: 1px solid #b8964f; background: #29271f; padding: 4px 6px; text-align: left; font-size: 12px; line-height: 1.3; }
+#objectives .now span { white-space: nowrap; color: #ffcf68; text-decoration: underline; }
+#objectives .done-toggle { align-self: flex-start; font-size: 10px; padding: 1px 6px; margin-top: 2px; color: var(--good); background: transparent; }
+#objectives .skip-ahead { font-size: 11px; padding: 3px 6px; }
+#hud > #house { top: 10px; left: 224px; background: none; border: 0; width: 190px; }
+#house .chip { width: 100%; text-align: left; font-size: 11px; background: var(--panel); padding: 4px 8px; }
+#house .chip-body { margin-top: 3px; background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px; font-size: 11px; color: var(--dim); display: flex; flex-direction: column; gap: 2px; }
 #family { top: auto; bottom: 10px; left: 10px; width: auto; display: flex; gap: 5px; padding: 5px; overflow: visible; max-height: none; }
 .card { display: grid; grid-template-columns: 25px 1fr; gap: 2px 5px; width: 123px; margin: 0; padding: 5px; text-align: left; }
 .portrait { grid-row: span 2; width: 25px; height: 32px; border-radius: 45% 45% 5px 5px; background: var(--person); display: grid; place-items: center; font-size: 17px; color: #fff; }
@@ -135,16 +132,16 @@ button:disabled { opacity: 0.45; cursor: default; }
 .critical { animation: need-pulse 1s ease-in-out infinite alternate; }
 @keyframes need-pulse { to { background-color: #a33325; box-shadow: 0 0 6px #ee745d; } }
 @media (prefers-reduced-motion: reduce) { .critical { animation: none; outline: 1px solid #ee745d; } }
-#side { top: 76px; right: 10px; width: 258px; max-height: calc(100vh - 150px); }
+#side { top: auto; bottom: 80px; left: 10px; right: auto; width: 258px; max-height: calc(100vh - 400px); }
 .close-detail { float: right; font-size: 16px; padding: 0 6px; }
 .activity { color: #f3d7a1; font-size: 12px; margin: 7px 0; }
 #side .bar { height: 13px; }
-#log { bottom: 77px; left: 10px; width: 510px; max-height: 230px; overflow-y: auto; font-size: 11px; }
+#log { top: 10px; right: 10px; left: auto; bottom: auto; width: 340px; max-height: 230px; overflow-y: auto; font-size: 11px; }
 #log button { float: right; padding: 1px 5px; font-size: 10px; }
 #help { bottom: 10px; right: 10px; max-width: 360px; }
 #help summary { cursor: pointer; }
 
-#objectives .skip-ahead { color: #ffcf68; border: 1px solid #f4ca6b; background: #29271f; padding: 8px; }
+#objectives .skip-ahead { color: #ffcf68; border: 1px solid #b8964f; background: #29271f; }
 
 /* Wave 4c: speech bubbles over the speaker's head. */
 #bubbles { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }

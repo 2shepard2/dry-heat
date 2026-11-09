@@ -21,6 +21,9 @@
 //   covers      optional array parallel to objectives: beat id that completes each item;
 //               'camp-pickup' / 'friday-camp-pickup' are completed by the scheduled return, not the order
 //   activeObjective optional index of the current action in objectives (default 0); other items are dim
+//   before      optional outbound trip, same crew/target/minutes/label as `then`, plus optional `lines`
+//               spoken at home before boarding. Main `lines` and `log` wait for arrival; crew/car stay
+//               off map through the choice and its reply. `then` drives home without reboarding.
 //   then        optional { type: 'trip', who: [ids], target, minutes?, until?, label, away? }
 //               starts after do succeeds; everyone walks to the car before leaving; beat waits for return
 //               background: true advances after departure; the trip returns independently of later beats
@@ -58,8 +61,8 @@
 //   Jess    p4 the dishes, p5 the jugs, p11 the groceries in, p12 the sprinkler
 //   Theo    p2 the car, p9 the inhaler, p13a the gas station; also in p12, p14 and p14a
 // The four decisions: gas is Marcus (p13a), cart is Elena (p10), jugs is Jess (p5), walt is Elena (p4a).
-// The checkout (p10) is the beat's own step and the drive home is its `then` trip, so the register
-// comes before the return. p10 and p13a both decide first and then drive.
+// P10's `before` trip drives to Fry's; checkout stays off map until the `then` drive home.
+// P13a retains its at-home gas decision followed by the drive.
 //
 export const BEATS = [
   {
@@ -267,19 +270,22 @@ export const BEATS = [
 
   {
     id: 'p10', day: 0, at: 9 * 60 + 30,
+    before: { type: 'trip', who: ['marcus', 'elena'], target: 'store', minutes: 20,
+      label: 'Marcus and Elena drive to Fry’s', lines: [
+        { who: 'jess', text: 'So I am in charge of the house.' },
+        { who: 'marcus', text: 'Until we get back.' },
+        { who: 'jess', text: 'That is a lot of hours.' },
+      ] },
     covers: ['p10', 'p10', 'p10'],
     activeObjective: 1,
     objectives: ['Get the groceries', 'Put one thing back on the belt', 'Get home before the heat'],
     lines: [
-      { who: 'jess', text: 'So I am in charge of the house.' },
-      { who: 'marcus', text: 'Until we get back.' },
-      { who: 'jess', text: 'That is a lot of hours.' },
       { who: 'marcus', text: 'It was declined.' },
       { who: 'elena', text: 'Try it again.' },
       { who: 'marcus', text: 'It went through.' },
       { who: 'elena', text: 'Then one thing goes back.' },
     ],
-    log: 'Fry\'s is a hundred and eleven degrees inside. They go through it fast and the cooler sits between them on the way back.',
+    log: 'Fry\'s is a hundred and eleven degrees inside. They go through it fast and stop at the register.',
     teach: 'One thing has to go back on the belt. Choose below.',
     do: {
       type: 'choice', flag: 'cart', target: 'store', who: ['marcus', 'elena'],
