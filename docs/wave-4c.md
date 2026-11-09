@@ -1,0 +1,100 @@
+# Wave 4c: two things going, and speech bubbles
+
+Daniel's playtest of 4b (2026-11-08): the prologue is Marcus's day. Coffee, Theo, desk until noon, Walt, and only
+then Elena. Between story steps the player waits. Conversations scroll past in the log and you can't see who is
+talking to whom. Decision: keep the whole family playable (parents direct, kids by order) and make the prologue
+the practice run for running a household: **there is always a second thing to do, usually for someone else.**
+
+Three parts, three owners, no shared files:
+
+| Part | Owner | Files |
+|---|---|---|
+| A. Speech bubbles | MiniMax | new `src/bubbles.js`, `index.html`/CSS for the overlay, one call site in `beats.js` `speak()`, the `say()` helper in `family.js`, wiring in `main.js` (create + per-frame update only) |
+| B. Chore engine + prologue rebalance | Codex | `src/beats.js` (except `speak()`), `src/data/beats.js`, `src/ui.js`, `src/main.js`, `src/family.js` (desk routine only), tests |
+| C. Chore content | MiniMax (after A) | `src/data/chores.js` only |
+
+## A. Speech bubbles
+
+- `createBubbles(game)` returns `{ say(who, text), update(dtReal), clear() }`. A DOM overlay above the canvas, positioned every
+  frame by projecting the speaker's head (figure position + head height) through the orthographic camera.
+- Who can bubble: any family member on the map. Walt, Pruitt and Okafor only when they have a visible figure or site
+  near the line's beat target; otherwise log only. Radio and narration are log only. A speaker who is off map
+  (on a trip) or off screen gets no bubble; the log still has the line.
+- Lifetime: `clamp(1.8 + 0.06 * text.length, 2.5, 7)` real seconds, short fade in/out. The clock stops while the game is paused.
+  A new line from the same speaker replaces their bubble.
+- Two bubbles whose boxes overlap are pushed apart vertically, so a back-and-forth reads as two people talking.
+- Look: small, sober, readable at night. Dark translucent box, light text, max width about 220px, wraps, a tail
+  pointing at the head. No names inside (the tail shows the speaker). Must not block clicks (`pointer-events: none`).
+- Pacing: `beats.speak()` waits for the bubble's lifetime minus 0.6 s before the next line (minimum 1.6 s)
+  instead of a flat 2.5 s. The hurry once a step is done stays, but at 1.4 s, not 0.9.
+- Need lines in `family.js` `say()`: the spoken ones (currently written `Theo: "..."` / `Jess: "..."`) bubble from that
+  member. Narration ("Theo is crying and won't stop.") stays log only. Add an explicit speech field; don't
+  parse the log string.
+- The log is unchanged: every line still lands there for scrollback.
+
+## B. Chores: the second thing going
+
+A **chore** is an optional, parallel, ordinary task with a time window. It never blocks a beat, is never
+required, and quietly teaches the house (where things live) for the outage. Missed chores expire without comment.
+
+Schema (contract; `src/data/chores.js` exports `CHORES`):
+
+```js
+{
+  id: 'c-lunch',              // unique
+  day: -1,                     // -1 Thursday, 0 Friday
+  from: 435, to: 480,          // clock-minute window it is offered in
+  who: 'elena',                // suggested person (hint and marker colour); any parent may do it,
+                               // kids only via order when do.type === 'order'
+  label: "Pack Theo's lunch",  // objective text, ordinary-life voice
+  do: { type: 'use' | 'walk' | 'order', target, kid? },   // same targets as beats (beats.js mapBeatTargets)
+  minutes: 10,                 // game minutes of work at the target (use/order)
+  lines: [{ who, text }],      // optional, spoken (bubbles) when it completes
+  log: '...',                  // optional narration on completion
+  reveal: { item, into }       // optional: put one item (data/items.js id) into a target's container,
+                               //   e.g. the flashlight is now in the junk drawer; the player learned where it lives
+}
+```
+
+New props are allowed in `mapBeatTargets` for chore targets (same `prop()` helper, walkable cell, home or yard).
+
+Engine (Codex):
+- Offered chores (window open, not done) appear under the story step in the Now line as `Also: <label> (<who>)`,
+  at most two, earliest deadline first, and as dim optional items in the day's objective list.
+- A smaller marker in the suggested person's colour over the chore target. The story marker stays the bright one.
+- Clicking the target with a parent selected offers the chore action in the normal object menu.
+- Completion: lines, log, reveal, done. A chore task can be interrupted by a beat that needs that person; it just
+  stays offered.
+- Skip ahead stays available while chores are offered (the player's call), and it stops hurrying when a chore
+  window opens, so a new chore is never skipped past unseen.
+
+Prologue rebalance (Codex, `data/beats.js` + engine). Goal: by 9 AM Thursday the player has directed both
+parents, and nobody waits more than a minute of real time with nothing to do.
+1. **Desk is set-and-forget.** `use desk` seats Marcus once; afterwards, during work hours (8:30 to 12:00, Friday 13:00 to 17:00),
+   his routine returns him to the desk when he is free. P3 completes at noon as now, whether or not he left for
+   a chore. Elena or a chore can pull him away; he goes back by himself.
+2. **P2: Elena takes Theo.** Same opening lines (dentist at 9, call at 9, nobody moves), then Elena: "Fine. I'll drop
+   him on the way." The player orders Theo to the car; Elena and Theo leave (trip, Elena back about 10:30).
+   Who covers what stays the point: she covered.
+3. **Elena's late morning.** When she returns, she has chores (see C). P4 (Jess, dishes) stays Marcus asking at
+   Elena's request, but he does it from the desk break, not instead of it.
+4. **Camp pickup at 3** goes to Elena (she's free; Marcus has the call), as an `away` pickup.
+5. **Friday P13 (wait 45)** is the chores' slot, not a wait.
+6. Keep all four decisions, the money rule (three places only), the aurora, the cut. No new arguments.
+
+Tests: chore offered/expired/completed, reveal places the item, a chore never completes a beat, desk return after a
+chore, P2 trip with Elena, and the existing 32 still pass. Update `tools/playthrough.mjs` checks if beat order changes.
+
+## C. Chore content (MiniMax)
+
+About 14 chores over the two days, two or three per stretch, spread so Elena and Jess have as many as Marcus.
+Ordinary-life voice, nothing flagged as important. Each `reveal` ties to an outage need (light, water, heat,
+cooking, medical, tools) without saying so. Suggested set (adjust to the map's real targets):
+Thursday: pack Theo's lunch (Elena), get Jess up (Marcus, her door), take the bins to the curb (Marcus),
+water the citrus (Elena, hose: reveals garden_hose in the garage), put the laundry in (Elena), find the
+flashlight for the closet bulb (Jess by order: reveals flashlight in the kitchen drawer), put the camping cooler back
+in the garage (Marcus: reveals cooler), change the AC filter (Marcus).
+Friday: make breakfast (Marcus), put the groceries away (Elena), find the radio in the hall closet (Jess:
+reveals radio_handcrank), fold the laundry (Elena), cash in the junk drawer (Elena: reveals cash_wad), get the
+camp lantern down for Saturday (Marcus: reveals camp_lantern).
+One short exchange of lines on about half of them. Marriage rule: the strain is in who doesn't answer.
