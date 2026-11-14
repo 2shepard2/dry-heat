@@ -164,6 +164,14 @@ Three outcomes, set in section 0. The final state is judged on four axes: who is
 
 **3. Didn't all make it.** Trigger: a family member dies on either path. The survivors still reach outcome 1 or 2, and the text is quieter and names the loss. Each survivor gets a line. If no one survives, that is the one failure ending. A death never ends the game early.
 
+### How the endings feel and play (Daniel, 2026-11-13)
+
+Each ending is played in the world, like the outage night (wave 4e), then closes on short black cards.
+
+- **Held out = a little hope and luck after the ordeal.** Day 11, early: a diesel engine and a backup beeper are heard before anything is seen, and Theo hears it first. The street fills again, as on the aurora night, but with empty jugs this time. The kindness shows and is never explained: the person the family helped climbs down from the cab, and a soldier says "Somebody called this street in." A soldier hands Theo a cold bottle of water, the first cold thing in eleven days (if Theo is alive; otherwise the youngest survivor). Last image: the solar fan still turning (if Walt wired it). Cards end on "The power did not come back that summer. The water trucks did."
+- **Got out = desperation, no choices left.** It is never offered as a hopeful button. It opens only after the day 6 report, and only when something forces it: the tub is empty, Theo's inhaler is running out, or a break-in next door. Each person takes what they can carry from the house, and the rest is left. Marcus locks the door out of habit and stands there, while the neighbours who stayed watch. The trip is a short scripted drive (watching the fuel needle, a checkpoint) or a night walk (carrying Theo in turns) off the edge of the block. There is no new map region (Daniel accepted the cut for time). Arrival is not relief: a line, a wristband, a number ("You are 4,112"), and a cot in a hot tent. Last image: Marcus still has the house key in his pocket.
+- **Didn't all make it = a punch in the gut.** Anyone can die, the kids included ("we hold no punches"). The death happens in the world, never off screen. Afterwards the routine runs around the gap: an empty place on the bed and at the table, and their portrait stays in the bar, greyed, for the rest of the game. The ending quotes their actual last spoken line from this playthrough ("Jess's last words to anyone were ..."). If the convoy comes after a death, the text says how many days it missed by, plainly.
+
 **Recommendation for the jam: build 1 as the baseline, 2 as the second path, and fold 3 in as a variation of both.** Reasons:
 - Outcome 1 needs only a trigger and a text builder, and it honours "I'm not sure what the end would be": the answer is an interval, not an escape.
 - It fits the theme quietly: what the family cares about on day 11 is not what it was on Thursday.
