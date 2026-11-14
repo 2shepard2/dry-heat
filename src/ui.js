@@ -10,7 +10,8 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 // A click on the person whose panel is open closes it. Shift-click adds a parent to the selection.
 export function personClick(st, m, shift = false) {
   const { selected = [] } = st;
-  if (m.dead || m.away) return { act: 'open', picked: m, detail: st.detail === m ? null : m };
+  if (m.dead) return { act: 'none', picked: st.picked, detail: st.detail };
+  if (m.away) return { act: 'open', picked: m, detail: st.detail === m ? null : m };
   if (st.detail === m) return { act: 'close', picked: m, detail: null };
   if (!m.ai && shift) return { act: 'select', picked: m, detail: st.detail ? m : null };
   // a parent who is no longer selected is a fresh first click
@@ -53,6 +54,7 @@ export class UI {
       const c = e.target.closest('.card');
       if (!c) return;
       const m = game.family.find((x) => x.id === c.dataset.id);
+      if (m.dead) return;
       game.clickPerson(m, e.shiftKey);
       this.refresh();
     });
@@ -60,7 +62,8 @@ export class UI {
       const card = e.target.closest('.card');
       if (!card) return;
       e.preventDefault();
-      game.memberMenu(game.family.find((m) => m.id === card.dataset.id), e.clientX, e.clientY);
+      const m = game.family.find((m) => m.id === card.dataset.id);
+      if (!m.dead) game.memberMenu(m, e.clientX, e.clientY);
     });
     document.addEventListener('pointerdown', (e) => {
       if (!e.target.closest('#menu')) this.hideMenu();
@@ -135,7 +138,7 @@ export class UI {
     set($('#family'), g.family.map((m) => {
       const n = m.needs;
       const glyphs = [['hydration', '◆', 'Water'], ['food', '◒', 'Food'], ['energy', '☾', 'Rest'], ['health', '♥', 'Health'], ['morale', '✦', 'Spirit']];
-      return `<button class="card ${g.selected.includes(m) || g.detailMember === m ? 'sel' : ''} ${m.dead ? 'deadc' : ''}" data-id="${m.id}" title="${esc(m.name + ': ' + m.doing())}">
+      return `<button class="card ${g.selected.includes(m) || g.detailMember === m ? 'sel' : ''} ${m.dead ? 'deadc' : ''}" data-id="${m.id}" ${m.dead ? 'disabled aria-disabled="true"' : ''} title="${esc(m.name + ': ' + m.doing())}">
         <span class="portrait" style="--person:#${m.def.color.toString(16)}">${m.name[0]}</span><b>${m.name}</b>
         <span class="glyphs">${glyphs.map(([key, symbol, label]) => `<span class="glyph ${n[key] < 25 ? 'critical' : ''}" style="--fill:${n[key]}%;--need:${n[key] < 25 ? '#ee745d' : n[key] < 50 ? '#e7b653' : '#9acbaf'}" title="${label}: ${Math.round(n[key])}%" aria-label="${label}: ${Math.round(n[key])}%">${symbol}</span>`).join('')}</span>
       </button>`;
@@ -196,7 +199,7 @@ export class UI {
     for (const m of this.g.family) {
       let el = this.tags.get(m);
       if (!el) { el = document.createElement('div'); el.className = 'tag'; host.appendChild(el); this.tags.set(m, el); }
-      el.style.display = m.away ? 'none' : '';
+      el.style.display = m.away || m.dead ? 'none' : '';
       const v = m.pos.clone();
       v.y += m.asleep || m.dead ? 0.9 : m.def.h + 0.35;
       v.project(camera);

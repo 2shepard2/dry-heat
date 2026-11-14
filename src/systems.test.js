@@ -1311,3 +1311,212 @@ test('intro skip still plays the Saturday breaker/phone opening before revealing
   const taps = messages.findIndex((line) => line.includes('Fill the bathtub.'));
   assert.ok(breaker >= 0 && phone > breaker && taps > phone);
 });
+
+// Wave 5a: production tracking, death state, held-out interlude, card data, playtest URL.
+const { EndingEngine, CONVOY_MIN, HELD_OUT_SECONDS, buildEnding, endingContext, endingMatches,
+  installEndingTracking, recordWords, recordKindness, syncKindness, chooseHelper, parseEndingJump, applyEndingJump } = await import('./endings.js');
+const { ENDINGS } = await import('./data/endings.js');
+
+test('last words track beats, night, log-only speech and off-screen bubbles; neighbours and deaths cannot overwrite', () => {
+  const { g, b } = prologue([{ id: 'words', day: -1, at: 435, lines: [{ who: 'jess', text: 'A beat line.' }] }]);
+  g.bubbles = { say: () => null };
+  installEndingTracking(g);
+  // The already-started first beat speaks through its normal interpreter path.
+  b.speak(20);
+  assert.deepEqual(g.family[2].lastWords, { text: 'A beat line.', day: g.sim.day, min: g.sim.min });
+  b.nightSay('marcus', 'A night line.');
+  assert.equal(g.family[0].lastWords.text, 'A night line.');
+  g.log('Jess: "I\'m not your servant." She doesn\'t move.');
+  assert.equal(g.family[2].lastWords.text, "I'm not your servant.");
+  g.bubbles.say('theo', 'An off-screen line.');
+  assert.equal(g.family[3].lastWords.text, 'An off-screen line.');
+  const before = g.family.map((m) => m.lastWords);
+  g.bubbles.say('walt', 'A neighbour line.'); g.log('Walt: "Thanks."');
+  assert.deepEqual(g.family.map((m) => m.lastWords), before);
+  g.family[2].die(''); g.log('Jess: "Too late."'); g.bubbles.say('jess', 'Too late.');
+  assert.equal(g.family[2].lastWords.text, "I'm not your servant.");
+});
+
+test('kindness records walked decision once, successful solar build once, and watched helped event effects', () => {
+  const { g, s, m } = fixture(); installEndingTracking(g); syncKindness(g); syncKindness(g);
+  assert.deepEqual(g.kindness, [{ who: 'walt', day: -1, how: 'walked' }]);
+  g.sim.min = 4 * 1440 + 400;
+  s.walt.instruction = { right: true }; s.walt.lucid = true;
+  give(m, 'deep_cycle_battery', 'charge_controller');
+  at(m, s.site('panel'));
+  assert.equal(s.complete('solar', m), true);
+  syncKindness(g);
+  assert.equal(g.kindness.filter((k) => k.how === 'solar').length, 1);
+  assert.equal(g.kindness.at(-1).day, 5);
+  g.nightEvents = new NightEvents(g);
+  g.nightEvents.trigger('neighbor-at-door', false);
+  assert.equal(g.kindness.length, 2);
+  g.nightEvents.trigger('neighbor-at-door', true);
+  assert.deepEqual(g.kindness.at(-1), { who: 'cul-de-sac', day: 5, how: 'neighbor-at-door' });
+  g.nightEvents.trigger('stranger-at-the-gate', true);
+  assert.equal(g.kindness.at(-1).who, 'stranger');
+  assert.equal(chooseHelper(g), 'cul-de-sac');
+  recordKindness(g, 'walt', 'later'); assert.equal(chooseHelper(g), 'walt');
+  const other = fixture({ walt: 'wavedOff' }).g; syncKindness(other);
+  assert.equal(chooseHelper(other), null);
+  recordKindness(other, 'stranger', 'water'); assert.equal(chooseHelper(other), 'stranger');
+});
+
+test('death records time once, removes figure after its one log, preserves other lives and disables portrait clicks', () => {
+  const { g, m } = fixture();
+  g.selected = [m]; g.detailMember = m; g.pickedMember = m;
+  m.lieDown(g.map.objects.find((o) => o.home && o.kind === 'bed'));
+  const bed = m.bed;
+  let deaths = 0, logVisible;
+  const oldLog = g.log;
+  g.log = (s) => { if (s.includes('is dead.')) logVisible = m.obj.visible; oldLog(s); };
+  g.onDeath = () => deaths++;
+  m.die('Heat.');
+  assert.equal(logVisible, true); assert.equal(m.obj.visible, false);
+  assert.equal(m.dead, true); assert.equal(m.reservedBed, bed);
+  assert.deepEqual(m.diedAt, { day: 1, min: 360 });
+  assert.equal(g.over, undefined); assert.equal(g.family.filter((m) => !m.dead).length, 3);
+  g.sim.min += 1440; m.die('Again.'); assert.equal(deaths, 1);
+  assert.equal(m.diedAt.day, 1); assert.equal(g.selected.length, 0); assert.equal(g.detailMember, null);
+  const state = { picked: null, detail: null, selected: [] };
+  assert.deepEqual(personClick(state, m), { act: 'none', picked: null, detail: null });
+});
+
+test('grey portrait DOM retains all family members and renders death disabled; world tags hide', async () => {
+  const { readFileSync } = await import('node:fs');
+  // Inspect the render output through a minimal DOM; no renderer or browser package required.
+  const { UI } = await import('./ui.js');
+  const { g } = fixture();
+  g.family[2].die('');
+  g.sim.speed = 1; g.objectives = []; g.waterDays = () => ({ days: 2, perDay: 10, liters: 20 });
+  const elements = new Map();
+  const element = () => ({ innerHTML: '', style: {}, addEventListener() {}, classList: { toggle() {}, add() {}, remove() {} }, querySelectorAll: () => [] });
+  const oldDocument = globalThis.document;
+  globalThis.document = { addEventListener() {}, querySelectorAll: () => [], querySelector: (s) => { if (!elements.has(s)) elements.set(s, element()); return elements.get(s); } };
+  try {
+    const ui = new UI(g); ui.refresh();
+    const html = elements.get('#family').innerHTML;
+    assert.equal((html.match(/data-id=/g) || []).length, 4);
+    assert.match(html, /deadc[^]*?data-id="jess" disabled aria-disabled="true"/);
+    assert.match(readFileSync(new URL('../style.css', import.meta.url), 'utf8'), /\.card\.deadc\s*\{[^}]*grayscale\(1\)/);
+  } finally { globalThis.document = oldDocument; }
+});
+
+test('held-out trigger is day 11 at 06:20, outage only, living family at home, once only', () => {
+  const { g } = fixture(); const e = new EndingEngine(g);
+  g.sim.min = CONVOY_MIN - .001; assert.equal(e.check(), false);
+  g.sim.min = CONVOY_MIN; g.sim.phase = 'prologue'; assert.equal(e.check(), false);
+  g.sim.phase = 'outage'; g.departed = true; assert.equal(e.check(), false);
+  g.departed = false; g.family[0].away = true; assert.equal(e.check(), false);
+  g.family[0].away = false; assert.equal(e.check(), true);
+  assert.equal(g.ending.kind, 'held_out'); assert.equal(g.cutting, true); assert.equal(e.check(), false);
+  const lost = fixture().g; lost.sim.min = CONVOY_MIN; lost.family.forEach((m) => { m.dead = true; });
+  assert.equal(new EndingEngine(lost).check(), false);
+});
+
+test('held-out watched and skips converge for survivors, losses, helpers and every speed with no survival or night rolls', () => {
+  for (const loss of [[], ['theo'], ['marcus', 'elena', 'jess']]) for (const helper of [null, 'walt', 'cul-de-sac', 'stranger']) {
+    const results = [];
+    for (const skipAt of [null, 0, 3, 13, 24, 38]) {
+      const { g, messages } = fixture({ walt: 'wavedOff' });
+      g.bubbles = { say() {}, clear() {} }; installEndingTracking(g);
+      for (const id of loss) { recordWords(g, id, 'Before the convoy.'); g.family.find((m) => m.id === id).die(''); }
+      if (helper) recordKindness(g, helper, 'water');
+      g.sim.min = CONVOY_MIN; g.sim.speed = skipAt === null ? 8 : 0;
+      const needs = g.family.map((m) => ({ ...m.needs }));
+      const views = []; let cards = 0;
+      const engine = new EndingEngine(g, { view: (v) => views.push(v), cards: () => cards++ });
+      g.nightEvents = new NightEvents(g); const next = g.nightEvents.nextAt;
+      assert.ok(engine.check());
+      if (skipAt !== null) { engine.update(skipAt); engine.skip(); }
+      else for (let i = 0; i < HELD_OUT_SECONDS * 10 + 1; i++) { for (const m of g.family) m.update(0, .1); engine.update(.1); }
+      assert.equal(cards, 1); assert.equal(engine.scene, null); assert.equal(g.over, true); assert.equal(g.cutting, false);
+      assert.equal(g.sim.min, CONVOY_MIN); assert.equal(g.sim.speed, 0);
+      assert.deepEqual(g.family.map((m) => m.needs), needs);
+      assert.equal(g.nightEvents.nextAt, next); assert.equal(g.nightEvents.used.size, 0);
+      assert.equal(messages.filter((s) => s.includes('diesel engine')).length, 1);
+      assert.equal(messages.filter((s) => s.includes('Somebody called')).length, helper ? 1 : 0);
+      assert.ok(messages.some((s) => s.includes('It is cold.')));
+      const first = g.family.find((m) => !m.dead && m.id === 'theo') || g.family.filter((m) => !m.dead).sort((a, b) => a.age - b.age)[0];
+      assert.equal(first.lastWords.text, first.id === 'theo' ? 'Dad. Listen.' : 'Listen.');
+      assert.equal(views.at(-1).done, true);
+      results.push({ ending: g.ending, family: g.family.map((m) => ({ id: m.id, dead: m.dead, pos: m.pos.toArray(), words: m.lastWords, path: m.path, goal: m.goal, task: m.task })), cards: buildEnding(g, ENDINGS) });
+    }
+    for (const result of results.slice(1)) assert.deepEqual(result, results[0]);
+  }
+});
+
+test('total loss uses failure title and freezes; a single death continues toward held out', () => {
+  const { g } = fixture(); let cards = 0;
+  const engine = new EndingEngine(g, { cards: () => cards++ });
+  g.onDeath = () => { if (g.family.every((m) => m.dead)) engine.allLost(); };
+  g.family[0].die(''); assert.equal(g.over, undefined); assert.equal(cards, 0);
+  for (const m of g.family.slice(1)) m.die('');
+  assert.equal(g.over, true); assert.equal(g.sim.speed, 0); assert.equal(cards, 1);
+  assert.equal(buildEnding(g, ENDINGS).at(-1).ending, 'all_lost');
+});
+
+test('card builder matches every schema condition, stable first card per order, seven-card cap and title', () => {
+  const { g } = fixture({ walt: 'wavedOff' });
+  recordWords(g, 'jess', 'My actual last words.'); g.family[2].die('');
+  recordKindness(g, 'cul-de-sac', 'water'); g.systems.solar.built = true;
+  g.sim.min = CONVOY_MIN; g.ending = { kind: 'held_out', day: 11, min: CONVOY_MIN };
+  const ctx = endingContext(g);
+  for (const when of [{ anyDead: true }, { noneDead: false }, { dead: 'jess' }, { alive: 'theo' }, { helper: true }, { helper: 'cul-de-sac' }, { solar: true }, { missed: true }]) assert.equal(endingMatches(ctx, when), true, JSON.stringify(when));
+  for (const when of [{ anyDead: false }, { noneDead: true }, { dead: 'theo' }, { alive: 'jess' }, { helper: false }, { helper: 'walt' }, { solar: false }, { missed: false }, { via: 'drive' }, { unknown: true }]) assert.equal(endingMatches(ctx, when), false, JSON.stringify(when));
+  const data = [{ id: 'specific', ending: 'held_out', order: 2, when: { dead: 'jess' }, text: '{dead}' },
+    { id: 'general', ending: 'any', order: 2, text: 'general' },
+    { id: 'wrong', ending: 'got_out', order: 0, text: 'wrong' },
+    ...Array.from({ length: 10 }, (_, i) => ({ id: 'n' + i, ending: 'any', order: i + 3, text: '{days}' })),
+    { id: 'title', ending: 'held_out', title: true, text: 'Title' }];
+  const cards = buildEnding(g, data);
+  assert.equal(cards.length, 8); assert.equal(cards[0].id, 'specific'); assert.equal(cards.at(-1).title, true);
+  g.ending = { kind: 'got_out', day: 8, min: 7 * 1440, via: 'drive' };
+  assert.equal(endingMatches(endingContext(g), { via: 'drive' }), true);
+  assert.equal(endingMatches(endingContext(g), { via: 'walk' }), false);
+  assert.equal(endingMatches(endingContext(g), { missed: true }), false);
+  g.ending.via = 'walk'; assert.equal(endingMatches(endingContext(g), { via: 'walk' }), true);
+  assert.throws(() => buildEnding(g, [{ ending: 'got_out', order: 1, text: '{typo}' }]), /Unknown ending placeholder/);
+});
+
+test('every placeholder uses reached state, latest loss, word days and youngest surviving member', () => {
+  const { g } = fixture({ walt: 'wavedOff' });
+  g.sim.min = 6 * 1440 + 600; recordWords(g, 'jess', 'The line she really said.'); g.family[2].die('');
+  g.sim.min = 7 * 1440 + 600; recordWords(g, 'theo', 'Stay here.'); g.family[3].die('');
+  recordKindness(g, 'walt', 'water');
+  g.sim.min = CONVOY_MIN; g.ending = { kind: 'held_out', day: 11, min: CONVOY_MIN };
+  const cards = buildEnding(g, [{ ending: 'any', order: 1, text: '{dead}|{deadList}|{lastWords}|{lastWordsDay}|{missedDays}|{helper}|{youngest}|{survivors}|{days}' }]);
+  assert.equal(cards[0].text, "Theo|Jess and Theo|Stay here.|8|three days|Walt's daughter|Elena|Marcus and Elena|11");
+  g.family[3].diedAt = { day: 10, min: 9 * 1440 }; assert.equal(endingContext(g).values.missedDays, 'one day');
+  g.family[3].diedAt = { day: 11, min: CONVOY_MIN - 1 }; assert.equal(endingContext(g).values.missedDays, 'less than one day');
+});
+
+test('current ending content renders without unresolved placeholders for all 16 family combinations and helper states', () => {
+  for (let bits = 0; bits < 16; bits++) for (const helper of [null, 'walt', 'cul-de-sac', 'stranger']) {
+    const { g } = fixture({ walt: 'wavedOff' });
+    for (let i = 0; i < 4; i++) if (bits & (1 << i)) { recordWords(g, g.family[i].id, 'An actual line.'); g.family[i].die(''); }
+    if (helper) recordKindness(g, helper, 'water');
+    g.sim.min = CONVOY_MIN;
+    for (const kind of bits === 15 ? ['all_lost'] : ['held_out', 'got_out']) {
+      g.ending = { kind, day: 11, min: CONVOY_MIN, via: 'walk' };
+      const cards = buildEnding(g, ENDINGS);
+      for (const c of cards) assert.ok(!c.text.includes('{'), c.id);
+      if (kind !== 'got_out') assert.equal(cards.at(-1).title, true);
+    }
+  }
+});
+
+test('ending URL parser accepts held_out and valid unique comma-separated deaths only; jump seeds actual game state', () => {
+  for (const input of ['', '?ending=got_out', '?dead=jess', '?ending=unknown']) assert.equal(parseEndingJump(input), null);
+  assert.deepEqual(parseEndingJump('?ending=held_out'), { ending: 'held_out', dead: [] });
+  const jump = parseEndingJump('?ending=held_out&dead=jess,theo,jess,walt');
+  assert.deepEqual(jump, { ending: 'held_out', dead: ['jess', 'theo'] });
+  const { g } = prologue(); installEndingTracking(g); g.nightEvents = new NightEvents(g);
+  assert.equal(applyEndingJump(g, null), false); assert.equal(applyEndingJump(g, jump), true);
+  assert.equal(g.sim.day, 10); assert.equal(g.sim.hour, 23); assert.equal(g.sim.phase, 'outage');
+  assert.equal(g.sim.tubL, g.sim.TUB_MAX);
+  assert.deepEqual(g.family.filter((m) => m.dead).map((m) => m.id), ['jess', 'theo']);
+  assert.equal(g.family[2].lastWords.text, "I'm right here.");
+  assert.deepEqual(g.family[2].diedAt, { day: 10, min: 9 * 1440 + 23 * 60 });
+  assert.ok(g.nightEvents.nextAt > g.sim.min);
+});

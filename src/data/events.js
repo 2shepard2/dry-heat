@@ -67,13 +67,13 @@ export const NIGHT_EVENTS = [
   {
     id: 'neighbor-at-door', weight: 1, minDay: 2,
     text: 'The woman from across the cul-de-sac is on the step with a baby carrier. She says her taps stopped an hour ago.',
-    watched: { text: 'The watcher fills a bottle and a jar and hands them over. She says she will remember it.', effects: { tubL: -5, morale: { all: 5 }, energy: { watcher: -3 } } },
+    watched: { text: 'The watcher fills a bottle and a jar and hands them over. She says she will remember it.', effects: { helped: 'cul-de-sac', tubL: -5, morale: { all: 5 }, energy: { watcher: -3 } } },
     unwatched: { text: 'She knocks for twenty minutes and then walks the street trying doors. The shed stands open in the morning and the food is gone.', effects: { loseFood: 2, morale: { all: -8 }, energy: { all: -4 }, log: 'bad' } },
   },
   {
     id: 'stranger-at-the-gate', weight: 0.3, minDay: 3, once: true,
     text: 'There is someone at the side gate asking for water. They will not say where they came from.',
-    watched: { text: 'The watcher hands over a bottle through the gate and stays by the door until they walk off up the street.', effects: { tubL: -4, morale: { parents: -2 }, energy: { watcher: -5 } } },
+    watched: { text: 'The watcher hands over a bottle through the gate and stays by the door until they walk off up the street.', effects: { helped: 'stranger', tubL: -4, morale: { parents: -2 }, energy: { watcher: -5 } } },
     unwatched: { text: 'Nobody answers. Later the carport door stands open and the food on the garage shelf is gone.', effects: { loseFood: 3, morale: { all: -10 }, energy: { all: -5 }, log: 'bad' } },
   },
   {

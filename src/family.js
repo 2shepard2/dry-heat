@@ -511,6 +511,7 @@ export class Member {
     this.asleep = true;
     this.restAt = this.pos.clone();
     this.bed = bed || null;
+    if (bed) this.lastBed = bed;
     if (bed) this.pos.set(bed.x + 0.5, 0, bed.y + 0.5);
     this.layFlat(bed ? 0.55 : 0.05);
     this.play('idle');
@@ -544,6 +545,9 @@ export class Member {
   }
 
   die(cause) {
+    if (this.dead) return;
+    this.diedAt = { day: this.game.sim.day, min: this.game.sim.min };
+    this.reservedBed = this.bed || this.lastBed;
     this.dead = true;
     this.stopTask(true);
     if (this.draggedBy) { this.draggedBy.stopTask(true); this.draggedBy = null; }
@@ -551,6 +555,10 @@ export class Member {
     this.mixer.stopAllAction();
     this.body.traverse((m) => { if (m.isMesh) m.material.color.multiplyScalar(0.45); });
     this.game.log(`${this.name} is dead. ${cause}`, 'dead');
+    this.obj.visible = false;
+    this.game.selected = this.game.selected.filter((m) => m !== this);
+    if (this.game.detailMember === this) this.game.detailMember = null;
+    if (this.game.pickedMember === this) this.game.pickedMember = null;
     this.game.onDeath(this);
   }
 

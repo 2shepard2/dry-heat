@@ -2,6 +2,7 @@
 import { NIGHT_EVENTS } from './data/events.js';
 import { T } from './map.js';
 import { needsMatch } from './conditions.js';
+import { recordKindness } from './endings.js';
 
 const record = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const clamp = (v, max = 100) => Math.max(0, Math.min(max, v));
@@ -27,6 +28,7 @@ function validEvent(e) {
   for (const branch of [e.watched, e.unwatched]) {
     if (!record(branch) || typeof branch.text !== 'string' || !record(branch.effects)) return false;
     for (const [k, v] of Object.entries(branch.effects)) {
+      if (k === 'helped' && (typeof v !== 'string' || !v)) return false;
       if (k === 'flags' && !record(v)) return false;
       if (['tubL', 'loseFood', 'trust'].includes(k) && !Number.isFinite(v)) return false;
       if (k === 'theoWanders' && v !== true) return false;
@@ -123,6 +125,7 @@ export class NightEvents {
     const g = this.game;
     for (const [key, value] of Object.entries(effects)) {
       switch (key) {
+        case 'helped': recordKindness(g, value, id); break;
         case 'trust': g.trust = clamp((g.trust ?? 45) + value); break;
         case 'flags': Object.assign(g.flags, value); break;
         case 'tubL': g.sim.tubL = clamp(g.sim.tubL + value, g.sim.TUB_MAX); break;
