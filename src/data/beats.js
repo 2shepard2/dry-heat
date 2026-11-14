@@ -26,6 +26,7 @@
 //               off map through the choice and its reply. `then` drives home without reboarding.
 //   then        optional { type: 'trip', who: [ids], target, minutes?, until?, label, away? }
 //               starts after do succeeds; everyone walks to the car before leaving; beat waits for return
+//               when: { decision: value } optionally gates the trip on that choice
 //               background: true advances after departure; the trip returns independently of later beats
 //               until = local clock minute of return on this beat's day (otherwise minutes = trip length)
 //               away: { who, until, pickup, minutes?, id? } keeps one traveller off map after driver returns;
@@ -44,7 +45,7 @@
 //     { type: 'wait', minutes }                   nothing to do; the clock runs
 //   optional    true = the beat is skippable; it ends itself after `timeout` minutes (default 30)
 //   sets        optional array of flag names set true when done (touchedJugs, sawPruitt, inhalerChecked, ...)
-//   outage      true on the last beat only (P15): when done, the game cuts to day 1, 5:40 AM, power out
+//   outage      true on the last beat only (P15): when done, the scripted outage night begins (power fails at 3:12 AM)
 //
 // Targets (Codex maps these to map objects; use only these):
 //   coffee, desk, sink, fridge, pantry, garage-jugs, garage-shelf, car, inhaler, couch, dinner-table,
@@ -68,7 +69,7 @@ export const BEATS = [
   {
     id: 'p1', day: -1, at: 7 * 60 + 15,
     covers: ['p1', 'p2', 'p3'],
-    objectives: ['Make coffee', 'Get Theo to day camp', 'Finish the Hendricks deck by noon'],
+    objectives: ['Make coffee', 'Get Theo to day camp', 'Finish the Hendricks deck'],
     lines: [
       { who: 'elena', text: 'Your lunch is in the blue bag. The ice pack is on the left.' },
       { who: 'elena', text: 'Eggs are four dollars now. Four.' },
@@ -85,7 +86,7 @@ export const BEATS = [
     id: 'p2', day: -1, at: 7 * 60 + 30,
     covers: ['p2', 'p3', 'p3'],
     then: { type: 'trip', who: ['elena', 'theo'], target: 'car', until: 10 * 60 + 30, background: true, label: 'Elena drives Theo to day camp and goes to the dentist', away: { who: 'theo', until: 15 * 60, pickup: 'elena', minutes: 20, id: 'camp-pickup' } },
-    objectives: ['Get Theo to day camp', 'Take the nine o\'clock call', 'Finish the Hendricks deck by noon'],
+    objectives: ['Get Theo to day camp', 'Take the nine o\'clock call', 'Finish the Hendricks deck'],
     lines: [
       { who: 'theo', text: 'I have a stomachache.' },
       { who: 'elena', text: 'You have a stomachache that starts on Wednesdays.' },
@@ -114,7 +115,7 @@ export const BEATS = [
   {
     id: 'p4', day: -1, at: 12 * 60,
     covers: ['p4', 'camp-pickup', 'p3'],
-    objectives: ['Ask Jess to do the dishes', 'Pick Theo up from camp at three', 'Finish the Hendricks deck'],
+    objectives: ['Ask Jess to do the dishes', 'Get Theo from camp at three', 'Finish the Hendricks deck'],
     lines: [
       { who: 'elena', text: 'Is that the Hendricks thing again?' },
       { who: 'marcus', text: 'It is fine. It is just restructuring.' },
@@ -134,8 +135,8 @@ export const BEATS = [
 
   {
     id: 'p4a', day: -1, at: 13 * 60 + 50,
-    covers: ['p4a', 'camp-pickup', 'p4a'],
-    objectives: ['Take the two o\'clock call', 'Get Theo from camp at three', 'Get back in time for the pickup'],
+    covers: ['p4a', 'camp-pickup'],
+    objectives: ['Take the two o\'clock call', 'Get Theo from camp at three'],
     lines: [
       { who: 'walt', text: 'Which one is mine? They have moved them again.' },
       { who: 'elena', text: 'The blue one, Walt. Third from the corner.' },
@@ -374,7 +375,7 @@ export const BEATS = [
 
   {
     id: 'p13a', day: 0, at: 17 * 60,
-    then: { type: 'trip', who: ['marcus', 'theo'], target: 'gas-station', minutes: 20, label: 'Marcus and Theo drive to the gas station' },
+    then: { type: 'trip', who: ['marcus', 'theo'], target: 'gas-station', when: { gas: 'full' }, minutes: 20, label: 'Marcus and Theo drive to the gas station' },
     objectives: ['Fill the tank', 'Get home before dark', 'Start dinner'],
     lines: [
       { who: 'theo', text: 'Are we going to the store?' },
@@ -402,7 +403,7 @@ export const BEATS = [
             { who: 'theo', text: 'Saturday?' },
             { who: 'marcus', text: 'Saturday.' },
           ],
-          log: 'The whole way home Theo asks if they are going to the store.',
+          log: 'Theo asks again if they are going to the store. Marcus leaves the keys on the counter.',
         },
       ],
     },
@@ -452,7 +453,7 @@ export const BEATS = [
     ],
     log: 'Everybody is asleep. The fan runs in the other room. Outside it is still July and the sky is clear.',
     teach: 'Nothing left to do tonight.',
-    do: { type: 'wait', minutes: 30 },
+    do: { type: 'wait', minutes: 0 },
     outage: true,
     sets: ['lastNormalNight'],
   },

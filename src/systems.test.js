@@ -319,7 +319,7 @@ test('sleep rolls to Friday, optional beat times out, wait P15 cuts to outage', 
   assert.ok(b.sleep()); b.update(0, 2);
   assert.equal(g.sim.day, 0); assert.equal(g.sim.dateLabel(), 'Friday, July 10');
   b.update(3, 2); assert.equal(g.flags.sawSky, true);
-  g.sim.step(60); b.update(0, 0); b.update(2, 2); assert.equal(g.sim.phase, 'outage'); assert.equal(g.sim.min, 340);
+  g.sim.step(60); b.update(0, 0); b.update(2, 2); assert.ok(b.night); b.update(0, 34); assert.equal(g.sim.phase, 'outage'); assert.equal(g.sim.min, 340);
 });
 
 test('prologue stays safe through a long wait; windows finish indoors, status never empty', () => {
@@ -348,7 +348,7 @@ test('optional choice expires and named child use is supported', () => {
 
 // Use the same entry points as object/kid menu callbacks, choice buttons and Z.
 // Never teleport arrivals, assign a task directly, call notify, or use jumpBeat.
-test('fresh no-jump playthrough: all 18 beats, real paths/trips, clock, decisions and no stalls', async () => {
+test('fresh no-jump playthrough: all 18 beats, unique open errands, real paths/trips, clock, decisions and no stalls', async () => {
   const { BEATS } = await import('./data/beats.js');
   for (const picks of [
     { walt: 'walked', jugs: 'shelf', cart: 'pharmacy', gas: 'full' },
@@ -362,6 +362,9 @@ test('fresh no-jump playthrough: all 18 beats, real paths/trips, clock, decision
     const completedObjectives = new Set(), hintedChores = new Set(), waitingChores = new Set();
     let campSeen = false, pickupSeen = false, fridayCampSeen = false;
     while (g.sim.phase === 'prologue' && seconds < 4000) {
+      if (b.night) { for (const member of g.family) member.update(0, .1); b.update(0, .1); seconds += .1; continue; }
+      const openErrands = g.objectives.filter((o) => !o.done).map((o) => /(?:Theo.*camp|pickup)/i.test(o.text) ? 'camp-pickup' : o.text);
+      assert.equal(new Set(openErrands).size, openErrands.length, `duplicate errand at ${b.current?.id}`);
       const beat = b.current, d = beat?.do;
       assert.equal(g.sim.speed, 1);
       const guide = b.guidance();
@@ -425,7 +428,7 @@ test('fresh no-jump playthrough: all 18 beats, real paths/trips, clock, decision
     const shelfStock = [];
     g.systems.stock(g.map.objects.find((o) => o.home && o.ch === 'S' && o.x === 35), shelfStock);
     assert.equal(shelfStock.some((i) => i.id === 'water_gallon'), picks.jugs === 'shelf');
-    assert.deepEqual([...seenAway], ['p2', 'p9', 'p10', 'p13a']);
+    assert.deepEqual([...seenAway], picks.gas === 'full' ? ['p2', 'p9', 'p10', 'p13a'] : ['p2', 'p9', 'p10']);
     assert.ok(campSeen && pickupSeen && fridayCampSeen);
     assert.ok(b.completed.has('camp-pickup') && b.completed.has('friday-camp-pickup'));
     assert.ok(messages.some((line) => line.includes('brings Theo home from camp')));
@@ -1073,7 +1076,7 @@ test('outage objectives exist synchronously at the day-one cut for normal and sk
         assert.ok(g.objectives.every((o) => !o.done && !o.prologue));
       } });
     if (skip) b.outage(true);
-    else { g.sim.min = -1440 + 1400; b.start(); b.update(0, 0); }
+    else { g.sim.min = -1440 + 1400; b.start(); b.update(0, 0); assert.ok(b.night); b.update(0, 34); }
     assert.equal(cutSeen, true);
     b.update(1, 1); assert.deepEqual(g.objectives, objectives);
     g.objectives[0].done = true; assert.equal(objectives[0].done, undefined);
@@ -1153,4 +1156,158 @@ test('clock card date labels', () => {
   assert.equal(dateShort('Thursday, July 9'), 'Thu · July 9');
   assert.equal(dateShort('Day 1 · Saturday, July 11'), 'Day 1 · Sat · July 11');
   assert.equal(dateShort('Day 4 · Tuesday, July 14'), 'Day 4 · Tue · July 14');
+});
+
+test('sprinkler names the front yard, brings Theo out and sends both kids inside afterward', async () => {
+  const { BEATS } = await import('./data/beats.js');
+  const sprinkler = BEATS.find((beat) => beat.id === 'p12');
+  const { g, b, m } = prologue([sprinkler, { id: 'later', day: 0, at: 960, do: { type: 'wait', minutes: 300 } }]);
+  const theo = g.family.find((member) => member.id === 'theo');
+  const jess = g.family.find((member) => member.id === 'jess');
+  assert.match(b.guidance().text, /front yard/);
+  assert.ok(theo.path.length, 'Theo walks out without a separate player order');
+  assert.ok(b.interact('sprinkler', [m]));
+  let theoAtSprinkler = false;
+  for (let i = 0; i < 600; i++) {
+    g.sim.step(.1);
+    for (const member of g.family) member.update(.1, .1);
+    b.update(.1, .1);
+    if (Math.hypot(theo.pos.x - 29.5, theo.pos.z - 17.5) < 2) theoAtSprinkler = true;
+    if (b.completed.has('p12') && [theo, jess].every((member) => g.map.isIndoor(...member.cell()))) break;
+  }
+  assert.ok(theoAtSprinkler, 'Theo actually arrives at the sprinkler');
+  assert.ok(b.completed.has('p12'));
+  for (const member of [theo, jess]) assert.ok(g.map.isIndoor(...member.cell()), `${member.name} comes inside`);
+});
+
+test('gas choice drives to the station only for fill up, with both answers completing', async () => {
+  const { BEATS } = await import('./data/beats.js');
+  for (const answer of ['full', 'quarter']) {
+    const { g, b, messages } = prologue([BEATS.find((beat) => beat.id === 'p13a')]);
+    flushLines(b); assert.ok(b.pick(answer));
+    let drove = false;
+    for (let i = 0; i < 1000 && !b.completed.has('p13a'); i++) {
+      const dt = b.paused ? 0 : .1;
+      g.sim.step(dt);
+      for (const member of g.family) member.update(dt, .1);
+      b.update(dt, .1);
+      if (b.trip) {
+        drove = true;
+        assert.deepEqual(b.trip.crew.map((member) => member.id), ['marcus', 'theo']);
+      }
+      if (answer === 'quarter') {
+        assert.equal(b.boarding, null); assert.equal(b.trip, null);
+        assert.ok(g.family.every((member) => !member.away));
+      }
+    }
+    assert.ok(b.completed.has('p13a'), answer);
+    assert.equal(drove, answer === 'full');
+    assert.equal(messages.some((line) => line.includes('drive to the gas station')), answer === 'full');
+  }
+});
+
+test('every outdoor chore walks its worker back inside, including Jess with bins and mail', () => {
+  const { g: probe, b: targets } = prologue();
+  const outside = CHORES.filter((c) => !probe.map.isIndoor(targets.targets[c.do.target].x, targets.targets[c.do.target].y)
+    || c.do.target === 'front-door');
+  assert.deepEqual(outside.map((c) => c.id), ['c-bins', 'c-tires', 'c-mail', 'c-medkit', 'c-bins-out', 'c-cooler']);
+  for (const chore of outside) {
+    const { g, b, m } = prologue([{ id: 'quiet', day: chore.day, at: chore.from,
+      do: { type: 'wait', minutes: 500 } }], [chore]);
+    const worker = chore.do.type === 'order' ? g.family.find((member) => member.id === chore.do.kid) : m;
+    assert.ok(b.interactChore(chore.id, [m]), chore.id);
+    // Reach and complete the actual chore task; the return must then walk its path.
+    finish(worker);
+    assert.ok(b.doneChores.has(chore.id), chore.id);
+    for (let i = 0; i < 300 && !g.map.isIndoor(...worker.cell()); i++) {
+      g.sim.step(.1); worker.update(.1, .1); b.update(.1, .1);
+    }
+    assert.ok(g.map.isIndoor(...worker.cell()), `${chore.id} returns inside despite the order cooldown`);
+    assert.equal(worker.autonomousLocation, true);
+  }
+});
+
+test('scripted outage night watched and skipped converge, with no historical or first-hour night roll', async () => {
+  const { BEATS } = await import('./data/beats.js');
+  const { readFile } = await import('node:fs/promises');
+  const main = await readFile(new URL('./main.js', import.meta.url), 'utf8');
+  const objectives = Function('return ' + main.match(/objectives:\s*(\[[\s\S]*?\n  \]),/)[1])();
+  const runs = [];
+  for (const skipAt of [null, 0, 5.1, 17, 24, 28]) {
+    const { g, messages } = fixture(); g.sim = new Sim({ phase: 'prologue' });
+    g.nightEvents = new NightEvents(g);
+    let rolls = 0, ended = 0, skipped = false;
+    g.nightEvents.run = () => { rolls++; };
+    const views = [], bubbles = [];
+    g.bubbles = { say: (who, text) => bubbles.push([who, text]) };
+    const b = new Prologue(g, { beats: [BEATS.find((beat) => beat.id === 'p15')], chores: CHORES,
+      outageObjectives: objectives, nightView: (view) => views.push({ ...view }), cut: () => { ended++; } });
+    g.sim.min = -30; b.start();
+    for (let i = 0; i < 300; i++) { b.update(0, .1); if (b.night) break; }
+    assert.ok(b.night); assert.equal(g.sim.min, -30); bubbles.length = 0;
+    assert.ok(g.family.every((member) => member.asleep));
+    let marcusAtDoor = false, theoAtStep = false;
+    for (let i = 0; i < 400 && b.night; i++) {
+      if (skipAt !== null && !skipped && b.night.elapsed >= skipAt) {
+        b.skipNight(); skipped = true;
+        if (b.night) assert.equal(g.outageNight.stage, 'breaker');
+      }
+      if (!b.night) break;
+      assert.deepEqual(g.objectives, [], 'survival objectives wait for the breaker/phone beat');
+      assert.deepEqual(b.offeredChores(), []); assert.equal(b.guidance(), null);
+      for (const member of g.family) member.update(0, .1);
+      b.update(0, .1);
+      const marcus = g.family[0], theo = g.family[3];
+      if (skipAt === null && g.outageNight.stage === 'breaker' && g.outageNight.elapsed >= 30) {
+        const panel = g.map.sites.find((site) => site.key === 'panel');
+        assert.ok(Math.hypot(marcus.pos.x - panel.x - .5, marcus.pos.z - panel.y - .5) < 2, 'Marcus reaches the garage panel before speaking');
+      }
+      if (g.outageNight.stage === 'window') {
+        if (Math.hypot(marcus.pos.x - 27.5, marcus.pos.z - 15.5) < 2) marcusAtDoor = true;
+        if (Math.hypot(theo.pos.x - 27.5, theo.pos.z - 16.5) < 1) theoAtStep = true;
+      }
+    }
+    assert.equal(ended, 1); assert.equal(g.sim.phase, 'outage'); assert.equal(g.sim.day, 1);
+    assert.equal(g.sim.power, false); assert.equal(g.sim.min, 340); assert.equal(g.sim.indoor, 81);
+    assert.deepEqual(g.objectives, objectives);
+    assert.equal(g.family[3].flags.wandered, true);
+    assert.deepEqual(g.family[3].cell(), [27, 16]);
+    assert.equal(g.nightEvents.used.size, 0); assert.equal(rolls, 0);
+    g.nightEvents.update();
+    g.sim.min = 400; g.nightEvents.update();
+    assert.equal(rolls, 0, 'no Thursday/Friday backlog or first-hour Saturday roll');
+    assert.equal(g.nightEvents.nextAt, 1410);
+    assert.ok(messages.some((line) => line.includes('3:12 AM')));
+    assert.ok(!messages.some((line) => /power went out at 5:40/.test(line)));
+    if (skipAt === null) {
+      assert.ok(marcusAtDoor); assert.ok(theoAtStep, 'Theo walks to the step before the cards');
+      assert.ok(views.some((v) => v.flash && v.elapsed >= 5 && v.elapsed < 5.2));
+      assert.ok(views.some((v) => !v.porch && v.street.some(Boolean) && !v.street.every(Boolean)));
+      assert.deepEqual([...new Set(views.map((v) => v.card).filter(Boolean))],
+        ['4:30 AM. 81°F inside.', "Nobody's phone has a signal.", '5:40 AM. The sun is up. Nothing came back on.']);
+      assert.deepEqual(bubbles.map(([who]) => who), ['elena', 'marcus', 'elena', 'marcus', 'marcus', 'elena']);
+    }
+    runs.push({ minute: 340, indoor: g.sim.indoor, objectives: g.objectives, lights: g.outageNight,
+      positions: g.family.map((member) => member.pos.toArray()), flags: g.family[3].flags,
+      decisions: g.decisions, nextEvent: g.nightEvents.nextAt, rolls });
+  }
+  for (const run of runs.slice(1)) assert.deepEqual(run, runs[0]);
+});
+
+
+test('intro skip still plays the Saturday breaker/phone opening before revealing House objectives', () => {
+  const { g, b, messages } = prologue();
+  b.outageObjectives = [{ id: 'tub', text: 'Fill the bathtub while the taps still run' }];
+  g.decisions.gas = 'full';
+  assert.ok(b.startNight(true)); assert.ok(b.skipNight());
+  assert.equal(g.outageNight.stage, 'breaker'); assert.deepEqual(g.objectives, []);
+  assert.equal(g.sim.power, true, 'House stays hidden until the opening finishes');
+  b.update(0, 7);
+  assert.equal(g.sim.phase, 'outage'); assert.equal(g.sim.power, false);
+  assert.equal(g.sim.min, 340); assert.equal(g.decisions.gas, 'quarter');
+  assert.deepEqual(g.objectives, b.outageObjectives);
+  const breaker = messages.findIndex((line) => line.includes('Breakers are fine.'));
+  const phone = messages.findIndex((line) => line.includes('Not even the emergency alerts.'));
+  const taps = messages.findIndex((line) => line.includes('Fill the bathtub.'));
+  assert.ok(breaker >= 0 && phone > breaker && taps > phone);
 });

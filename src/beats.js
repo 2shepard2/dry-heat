@@ -35,11 +35,11 @@ export function mapBeatTargets(map) {
 }
 
 export class Prologue {
-  constructor(game, { beats = BEATS, chores = CHORES, targets = mapBeatTargets(game.map), outageObjectives = game.objectives || [], present = () => {}, aurora = () => {}, cut = () => {} } = {}) {
+  constructor(game, { beats = BEATS, chores = CHORES, targets = mapBeatTargets(game.map), outageObjectives = game.objectives || [], present = () => {}, aurora = () => {}, nightView = () => {}, cut = () => {} } = {}) {
     this.g = game; this.beats = beats; this.chores = chores;
     this.outageObjectives = outageObjectives.map((o) => ({ ...o }));
     this.doneChores = new Set(); this.choreHintTime = 0; this.choreLines = []; this.choreDelay = 0; this.targets = targets;
-    this.present = present; this.aurora = aurora; this.cut = cut;
+    this.present = present; this.aurora = aurora; this.nightView = nightView; this.cut = cut;
     this.index = -1; this.current = null; this.seenHints = new Set(); this.completed = new Set();
     this.lines = []; this.lineDelay = 0; this.pending = false; this.trip = null;
     this.todos = new Map(); this.todoDay = null;
@@ -89,7 +89,7 @@ export class Prologue {
   }
   offeredChores() {
     const now = this.g.sim.min;
-    return this.g.sim.phase !== 'prologue' ? [] : this.chores.filter((c) => !this.doneChores.has(c.id)
+    return this.g.sim.phase !== 'prologue' || this.night ? [] : this.chores.filter((c) => !this.doneChores.has(c.id)
       && now >= (c.day - 1) * 1440 + c.from && now < (c.day - 1) * 1440 + c.to)
       .sort((a, b) => a.to - b.to || a.id.localeCompare(b.id));
   }
@@ -127,6 +127,7 @@ export class Prologue {
       const into = this.targets[c.reveal.into];
       if (into) addEntry(into.items ||= [], makeEntry(c.reveal.item));
     }
+    if (!this.g.map.isIndoor(...m.cell())) m.returnToRoutine();
     this.refreshObjectives();
     return true;
   }
@@ -135,7 +136,9 @@ export class Prologue {
     const offered = new Set(this.offeredChores().map((c) => c.id));
     for (const m of this.g.family) {
       const work = m.task || m.goal;
-      if (work?.beatType?.startsWith('chore:') && !offered.has(work.beatType.slice(6))) m.stopTask(true);
+      if (work?.beatType?.startsWith('chore:') && !offered.has(work.beatType.slice(6))) {
+        m.stopTask(true); if (!this.g.map.isIndoor(...m.cell())) m.returnToRoutine();
+      }
     }
     // Separate dialogue state: optional speech never delays a beat or a choice.
     this.choreDelay -= dtReal;
@@ -173,6 +176,10 @@ export class Prologue {
     if (b.log && this.beforeDone) this.g.log(b.log);
     if (b.teach && !this.seenHints.has(b.teach)) { this.seenHints.add(b.teach); this.g.log(b.teach, 'hint'); }
     this.aurora(b.id === 'p14a', b);
+    if (b.do?.target === 'sprinkler') {
+      const theo = this.g.family.find((m) => m.id === 'theo');
+      theo?.useObject(this.targets.sprinkler, 'routine', { duration: Infinity, label: 'playing in the sprinkler' });
+    }
     this.showChoice();
   }
   speak(dtReal) {
@@ -196,6 +203,7 @@ export class Prologue {
     }
   }
   update(dtMin, dtReal) {
+    if (this.night) { this.updateNight(dtReal); return; }
     this.updateSkipping();
     if (this.g.sim.phase !== 'prologue') return;
     this.updateChores(dtReal);
@@ -235,7 +243,7 @@ export class Prologue {
       const o = this.targets[d.target];
       if (this.g.family.some((m) => (!d.who || m.id === d.who) && !m.autonomousLocation && !m.task?.autonomous && !m.goal?.autonomous && !m.away && Math.hypot(m.pos.x - o.x - 0.5, m.pos.z - o.y - 0.5) < 2)) this.pending = true;
     }
-    if (this.pending && b.then && !this.thenStarted
+    if (this.pending && b.then && Object.entries(b.then.when || {}).every(([key, value]) => this.g.decisions[key] === value) && !this.thenStarted
       && (!this.trip?.atDestination || (!this.lines.length && this.lineDelay <= 1e-8))) {
       this.thenStarted = true; this.pending = false; this.queueTrip(b.then);
     }
@@ -298,7 +306,7 @@ export class Prologue {
   }
   guidance() {
     const b = this.current, d = b?.do;
-    if (this.g.sim.phase !== 'prologue') return null;
+    if (this.g.sim.phase !== 'prologue' || this.night) return null;
     if (!d) return { text: 'Free time', target: null, crew: [], chores: this.choreHints(), canSkip: false };
     const name = (id) => this.g.family.find((m) => m.id === id)?.name || id;
     const o = this.targets[d.target];
@@ -308,7 +316,7 @@ export class Prologue {
     if (crew.every((id) => this.g.family.find((m) => m.id === id)?.ai)) crew = ['marcus'];
     const actions = { coffee: 'make coffee in the kitchen', desk: 'work at the desk in the spare room',
       pantry: 'check the pantry in the kitchen', inhaler: 'check Theo’s inhaler in the kitchen drawers',
-      sprinkler: 'join Theo at the sprinkler in the back yard', 'dinner-table': 'sit at the dinner table in the living room' };
+      sprinkler: 'join Theo at the sprinkler in the front yard', 'dinner-table': 'sit at the dinner table in the living room' };
     let text = d.type === 'choice' ? (this.choiceReady ? 'Choose below' : 'Listen, then choose below')
       : d.type === 'order' ? `Click ${name(d.kid)} and tell ${d.kid === 'theo' ? 'him to get in the car' : 'her to wash the dishes at the kitchen sink'}`
       : d.type === 'sleep' ? 'Press Z or click a bed to send everyone to sleep'
@@ -438,24 +446,131 @@ export class Prologue {
     const b = this.current;
     for (const flag of b.sets || []) this.g.flags[flag] = true;
     this.completed.add(b.id); this.present(null);
-    if (b.outage) { this.outage(); return; }
+    if (b.do?.target === 'sprinkler') for (const m of this.g.family.filter((m) => ['theo', 'jess'].includes(m.id))) { m.stopTask(true); m.returnToRoutine(); }
+    if (b.outage) { this.startNight(); return; }
     if (b.do?.type === 'sleep') for (const m of this.g.family) { m.stopTask(true); m.needs.energy = 95; }
     if (b.do?.type === 'sleep' && this.beats[this.index + 1]) this.g.sim.min = beatMinute(this.beats[this.index + 1]);
     this.next();
+  }
+  // A real-time interlude: the survival clock, chores and random events are held.
+  // Presentation observes this state; watching and skipping share one finalizer.
+  startNight(defaults = false) {
+    if (this.night || this.g.sim.phase !== 'prologue') return false;
+    this.stopSkipping(); this.present(null); this.aurora(false);
+    this.current = null; this.lines = []; this.choreLines = [];
+    const g = this.g;
+    this.night = { defaults, elapsed: 0, fired: new Set(), speed: g.sim.speed,
+      autonomy: g.family.map((m) => m.autonomy) };
+    g.cutting = true; g.sim.speed = 1; g.sim.min = -30;
+    g.objectives = [];
+    const beds = g.map.objects.filter((o) => o.home && o.ch === 'R');
+    g.family.forEach((m, i) => {
+      m.stopTask(true); m.autonomy = false;
+      // Begin asleep, with a walkable place to stand beside each bed on waking.
+      const bed = beds[i < 2 ? 0 : i - 1];
+      const cell = [[24, 7], [25, 8], [25, 13], [25, 14]][i];
+      m.pos.set(cell[0] + .5, 0, cell[1] + .5);
+      m.goal = { type: 'sleep', obj: bed }; m.startTask();
+    });
+    this.updateNight(0); return true;
+  }
+  nightSay(who, text) {
+    if (who === 'elena') this.g.family.find((m) => m.id === who).wake(true);
+    this.g.log(`${this.g.family.find((m) => m.id === who).name}: "${text}"`);
+    this.g.bubbles?.say(who, text);
+  }
+  nightWalk(who, target, label) {
+    const m = this.g.family.find((m) => m.id === who);
+    m.stopTask(true);
+    m.useObject(target, 'routine', { duration: Infinity, label });
+  }
+  skipNight() {
+    if (!this.night) return false;
+    // Skip the night and cards, then play the short Saturday breaker/phone beat.
+    if (this.night.elapsed < 27) {
+      for (const t of [9, 12, 15, 18]) this.night.fired.add(t);
+      this.updateNight(27 - this.night.elapsed);
+      const marcus = this.g.family.find((m) => m.id === 'marcus');
+      const cell = this.g.map.useCells(this.g.map.sites.find((site) => site.key === 'panel'))[0];
+      marcus.stopTask(true); marcus.pos.set(cell[0] + .5, 0, cell[1] + .5);
+      const theo = this.g.family.find((m) => m.id === 'theo');
+      theo.stopTask(true); theo.pos.set(27.5, 0, 16.5);
+    }
+    else this.updateNight(34 - this.night.elapsed);
+    return true;
+  }
+  updateNight(dtReal) {
+    const n = this.night, g = this.g;
+    n.elapsed = Math.min(34, n.elapsed + dtReal);
+    const at = (t, action) => { if (n.elapsed >= t && !n.fired.has(t)) { n.fired.add(t); action(); } };
+    at(5, () => {
+      g.log('A bang outside, like a gunshot, and a blue flash through the blinds.', 'warn');
+      g.log('The fan in the other room slows down and stops.');
+    });
+    at(7, () => {
+      this.nightWalk('marcus', this.targets['front-door'], 'looking out at the street');
+      // The step itself, rather than the sprinkler's lawn, is the destination.
+      const theo = g.family.find((m) => m.id === 'theo');
+      theo.stopTask(true);
+      theo.approach([[27, 16]], { type: 'routine', duration: Infinity, label: 'looking out from the front step' }, 'the front step');
+    });
+    at(9, () => this.nightSay('elena', 'What was that?'));
+    at(12, () => this.nightSay('marcus', "Transformer. The whole street's out."));
+    at(15, () => this.nightSay('elena', "It'll come back on."));
+    at(18, () => this.nightSay('marcus', 'Yeah.'));
+    // Marcus crosses to the garage during the black cards.
+    at(23, () => {
+      this.nightWalk('marcus', g.map.sites.find((site) => site.key === 'panel'), 'checking the breakers and his phone');
+    });
+    at(27, () => { g.sim.min = POWER_OUT_MIN; });
+    at(30, () => this.nightSay('marcus', "Breakers are fine. It's not us."));
+    at(32, () => this.nightSay('elena', 'No signal. Not even the emergency alerts.'));
+    const t = n.elapsed;
+    g.sim.indoor = t < 5 ? 78 : 78 + 3 * Math.min(1, (t - 5) / 16);
+    g.sim.min = t < 5 ? -30 + 222 * t / 5 : t < 21 ? 192 : t < 23 ? 270 : POWER_OUT_MIN;
+    const card = t >= 25 && t < 27 ? '5:40 AM. The sun is up. Nothing came back on.'
+      : t >= 23 && t < 25 ? "Nobody's phone has a signal."
+      : t >= 21 && t < 23 ? '4:30 AM. 81°F inside.' : '';
+    g.outageNight = { elapsed: t, porch: t < 5, street: [0, 1, 2].map((i) => t < 5 + i * .8),
+      flash: t >= 5 && t < 5.18, sparks: t >= 5 && t < 6.2, card,
+      stage: t < 5 ? 'asleep' : t < 7 ? 'transformer' : t < 21 ? 'window' : t < 27 ? 'cards' : 'breaker' };
+    this.nightView(g.outageNight);
+    if (t >= 34) this.outage(n.defaults);
   }
   outage(defaults = false) {
     if (this.g.sim.phase === 'outage') return false;
     this.stopSkipping();
     this.restoreTrip(); this.setCarAway(false); this.boarding = null; this.present(null); this.aurora(false);
     const g = this.g;
+    if (this.night) {
+      g.sim.speed = this.night.speed;
+      g.family.forEach((m, i) => { m.autonomy = this.night.autonomy[i]; });
+      this.night = null;
+    }
+    g.cutting = false;
+    g.outageNight = { stage: 'done', porch: false, street: [false, false, false], flash: false, sparks: false, card: '' };
+    this.nightView(g.outageNight);
     g.prologueSnapshot = { decisions: { ...g.decisions }, flags: { ...g.flags }, completed: [...this.completed] };
     g.decisions = { ...DEFAULT_DECISIONS, ...(defaults ? {} : g.decisions) };
     for (const m of g.family) { m.away = false; m.obj.visible = true; m.stopTask(true); m.pos.set(m.def.at[0] + 0.5, 0, m.def.at[1] + 0.5);
       // They slept the night in the AC: wake rested and fed, whatever the prologue clock did.
       Object.assign(m.needs, { energy: Math.max(m.needs.energy, 80), food: Math.max(m.needs.food, 70), hydration: Math.max(m.needs.hydration, 95) }); }
-    g.sim.phase = 'outage'; g.sim.min = POWER_OUT_MIN; g.sim.indoor = 78;
+    g.sim.phase = 'outage'; g.sim.min = POWER_OUT_MIN; g.sim.indoor = 81;
     g.objectives = this.outageObjectives.map((o) => ({ ...o }));
     applyDecisions(g);
+    // Both routes wake in the same places, with Theo frightened on the front step.
+    const theo = g.family.find((m) => m.id === 'theo');
+    theo.pos.set(27.5, 0, 16.5); theo.flags.wandered = true; theo.flags.outageStep = true;
+    theo.mode = { type: 'stay' }; theo.needs.morale = 24;
+    const marcus = g.family.find((m) => m.id === 'marcus');
+    const garage = g.map.useCells(g.map.sites.find((site) => site.key === 'panel'))[0];
+    marcus.pos.set(garage[0] + .5, 0, garage[1] + .5);
+    // The event scheduler was constructed on Thursday. Discard those historical
+    // slots so the first roll is Saturday night, never the scripted outage dawn.
+    if (g.nightEvents) g.nightEvents.nextAt = 23 * 60 + 30;
+    g.log('Day 1. The power went out at 3:12 AM. The street is still dark.', 'warn');
+    g.log('Theo is on the front step, frightened by the bang. He is crying.', 'warn');
+    g.log('Water still comes out of the taps, for now. Fill the bathtub.', 'warn');
     this.current = null; this.lines = []; this.choreLines = []; this.cut(); return true;
   }
 }

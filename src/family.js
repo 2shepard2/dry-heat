@@ -417,7 +417,7 @@ export class Member {
       if (occupied.has(map.idx(x, y))) continue;
       if (x === cx && y === cy) { best = { p: [] }; break; }
       const p = findPath(map, cx, cy, x, y);
-      if (p && (!goal.autonomous || p.every(([a, b]) => (goal.outdoors || !map.isIndoor(cx, cy) || map.isIndoor(a, b)) && map.lotAt[map.idx(a, b)] === map.lots.indexOf(map.home))) && (!best || p.length < best.p.length)) best = { p };
+      if (p && (!goal.autonomous || goal.returningHome || p.every(([a, b]) => (goal.outdoors || !map.isIndoor(cx, cy) || map.isIndoor(a, b)) && map.lotAt[map.idx(a, b)] === map.lots.indexOf(map.home))) && (!best || p.length < best.p.length)) best = { p };
     }
     if (!best) { if (!goal.autonomous) this.game.log(`${this.name} can't get to ${what}.`, 'warn'); return false; }
     this.stopTask(true);
@@ -744,6 +744,13 @@ export class Member {
     }
   }
 
+  // Finish an outdoor errand by walking home, without the normal order cooldown.
+  returnToRoutine() {
+    const cells = this.teen ? [[25, 13], [25, 14]] : this.child ? [[31, 13], [30, 13]] : [[30, 12], [29, 12]];
+    return this.approach(cells, { type: 'routine', autonomous: true, returningHome: true,
+      label: 'returning inside', duration: 0 }, 'home');
+  }
+
   updateBody(dtMin) {
     const g = this.game, sim = g.sim, map = g.map, n = this.needs;
     if (sim.phase === 'prologue') {
@@ -901,7 +908,7 @@ export class Member {
     if (this.draggedBy) return `Being dragged by ${this.draggedBy.name}`;
     if (this.collapsed) return 'Unconscious';
     if (this.isWatching()) return 'Keeping watch';
-    if (this.flags.wandered) return 'In the back yard: needs fetching';
+    if (this.flags.wandered) return this.flags.outageStep ? 'On the front step: needs fetching' : 'In the back yard: needs fetching';
     if (t?.autonomous) return t.label || (this.asleep ? 'sleeping' : 'taking care of things');
     if (this.goal?.autonomous) return `Going to ${this.goal.label || 'rest'}`;
     if (t) {

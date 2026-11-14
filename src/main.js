@@ -64,15 +64,70 @@ moon.target.position.set(map.W / 2, 0, map.H / 2);
 scene.add(moon, moon.target);
 
 // Warm, bounded room lights: no yard-wide ambient boost when the grid is on.
-const roomLights = [[25, 7], [30, 8], [30, 12], [24, 11], [25, 14], [36, 12]].map(([x, z]) => {
+const roomSpots = [[25, 7], [30, 8], [30, 12], [24, 11], [25, 14], [36, 12]];
+const roomLights = roomSpots.map(([x, z]) => {
   const light = new THREE.PointLight(0xffce8c, 0, 8, 2);
   light.position.set(x, 2.6, z); scene.add(light); return light;
 });
+// Outage night uses the existing block geometry: warm lamps and window glows,
+// one short-lived transformer light, and a few emissive sparks (no assets).
+const porch = roomLights[0];
+const porchBulb = new THREE.Mesh(new THREE.BoxGeometry(.15, .2, .15), new THREE.MeshBasicMaterial({ color: 0xffdf9b }));
+porchBulb.position.set(27.5, 2.4, 15.7); scene.add(porchBulb);
+const streetLights = [28, 48, 8].map((x, i) => {
+  // Borrow room lights while everyone is asleep; only the flash adds a light.
+  const light = roomLights[i + 1];
+  const bulb = new THREE.Mesh(new THREE.BoxGeometry(.6, .12, .25), new THREE.MeshBasicMaterial({ color: 0xffdf9b }));
+  bulb.position.set(x, 7.2, map.H / 2 - 3.2); scene.add(bulb);
+  return { light, bulb, x };
+});
+const nightWindows = map.lots.map((lot) => {
+  const window = new THREE.Mesh(new THREE.BoxGeometry(.7, .5, .06), new THREE.MeshBasicMaterial({ color: 0xeebc78 }));
+  window.position.set(lot.gx * 20 + 10, 1.6, lot.north ? 15 : 29); scene.add(window); return window;
+});
+const transformer = new THREE.Mesh(new THREE.CylinderGeometry(.36, .36, .9, 10), new THREE.MeshLambertMaterial({ color: 0x7b898e }));
+transformer.position.set(28.4, 6.9, map.H / 2 - 3.2); scene.add(transformer);
+const transformerFlash = new THREE.PointLight(0xb8e8ff, 0, 100, 1);
+transformerFlash.position.copy(transformer.position); scene.add(transformerFlash);
+const breakerHandle = new THREE.Mesh(new THREE.BoxGeometry(.1, .24, .12), new THREE.MeshLambertMaterial({ color: 0x292d30 }));
+breakerHandle.position.set(38.5, .6, 13.9); scene.add(breakerHandle);
+const nightPhone = new THREE.Mesh(new THREE.BoxGeometry(.09, .16, .025), new THREE.MeshBasicMaterial({ color: 0x70818b }));
+nightPhone.position.set(.32, 1.2, .24); nightPhone.visible = false;
+const outageSparks = Array.from({ length: 6 }, () => {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(.05, .11, .05), new THREE.MeshBasicMaterial({ color: 0xbceaff }));
+  mesh.visible = false; scene.add(mesh); return mesh;
+});
+function updateOutageLights() {
+  const n = game.outageNight, dark = 1 - Math.min(1, sim.sun() * 5);
+  const night = game.beats?.night;
+  porchBulb.visible = (n ? n.porch : sim.power) && dark > .1;
+  if (night) { porch.position.copy(porchBulb.position); porch.intensity = n.porch ? 18 : 0; }
+  streetLights.forEach(({ light, bulb }, i) => {
+    const on = (n ? n.street[i] : sim.power) && dark > .1;
+    bulb.visible = on;
+    if (night) { light.position.copy(bulb.position); light.distance = 15; light.intensity = on ? 65 : 0; }
+  });
+  nightWindows.forEach((w, i) => { w.visible = (n ? n.street[i % 3] : sim.power) && dark > .1; });
+  transformerFlash.intensity = n?.flash ? 1700 : 0;
+  breakerHandle.rotation.x = n?.stage === 'breaker' && n.elapsed >= 30 ? -.7 : .7;
+  nightPhone.visible = n?.stage === 'breaker' && n.elapsed >= 30;
+  outageSparks.forEach((mesh, i) => {
+    mesh.visible = !!n?.sparks;
+    if (mesh.visible) {
+      const t = n.elapsed - 5;
+      mesh.position.set(28.4 + Math.cos(i * 2.4) * t * 1.5, 6.9 - t * t * 4 - i * .06, transformer.position.z + Math.sin(i * 2.4) * t);
+    }
+  });
+}
 const C = (h) => new THREE.Color(h);
 const SKY = { night: C(0x0a0e18), dawn: C(0xd99a6a), day: C(0xc8d3d8), haze: C(0xe1d2b4) };
 function updateLight() {
   const s = sim.sun();
-  roomLights.forEach((light) => { light.intensity = sim.power ? 32 * (1 - Math.min(1, s * 5)) : 0; });
+  roomLights.forEach((light, i) => {
+    light.position.set(roomSpots[i][0], 2.6, roomSpots[i][1]); light.distance = 8;
+    light.intensity = sim.power && !game.beats?.night ? 32 * (1 - Math.min(1, s * 5)) : 0;
+  });
+  updateOutageLights();
   const a = sim.sunAngle();
   const center = new THREE.Vector3(map.W / 2, 0, map.H / 2);
   sun.position.set(center.x + Math.cos(a) * 60, 6 + Math.sin(Math.max(0, a)) * 70 * Math.max(s, 0.05), center.z + 25 * Math.max(0, Math.sin(a)));
@@ -855,6 +910,17 @@ addEventListener('keydown', (e) => {
   if (k === '+' || k === '=') { cam.zoom = Math.min(4.5, cam.zoom * 1.15); placeCamera(); }
   if (k === '-') { cam.zoom = Math.max(0.7, cam.zoom / 1.15); placeCamera(); }
 });
+let nightSkipClick = false;
+for (const type of ['pointerdown', 'keydown']) addEventListener(type, (e) => {
+  if (!game.beats?.night) return;
+  e.preventDefault(); e.stopImmediatePropagation(); keys.clear();
+  if (type === 'pointerdown') nightSkipClick = true;
+  if (!e.repeat) game.beats.skipNight();
+}, true);
+// Consume the click generated by a skip pointerdown, too.
+addEventListener('click', (e) => {
+  if (game.beats?.night || nightSkipClick) { e.preventDefault(); e.stopImmediatePropagation(); nightSkipClick = false; }
+}, true);
 addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 let roofsOff = false;
 
@@ -880,7 +946,10 @@ function frame(now) {
   cam.yaw += (cam.yawGoal - cam.yaw) * Math.min(1, dtReal * 8);
   placeCamera();
 
-  if (started && !game.over) {
+  if (started && !game.over && game.beats.night) {
+    for (const m of game.family) m.update(0, dtReal);
+    game.beats.update(0, dtReal);
+  } else if (started && !game.over) {
     game.beats.updateSkipping();
     const dtMin = game.beats.limitStep(dtReal * (game.beats.paused || game.cutting ? 0 : sim.speed)); // 1 real second = 1 game minute at 1x
     // sub-step the body sim at high speed so thresholds aren't skipped
@@ -965,7 +1034,11 @@ function frame(now) {
     ui.tagsUpdate(camera, renderer);
     game.bubbles.update(dtReal);
     uiAcc += dtReal;
-    if (uiAcc > 0.2) { uiAcc = 0; ui.refresh(); }
+    if (uiAcc > 0.2) {
+      uiAcc = 0; ui.refresh();
+      // The scripted night holds the prologue's House reveal until the phone beat.
+      if (game.beats.night) $('#clock .cal').textContent = sim.min < 0 ? 'Fri · July 10' : 'Sat · July 11';
+    }
   }
   requestAnimationFrame(frame);
 }
@@ -1031,6 +1104,7 @@ function installBuildSites() {
   const baseH = box.max.y - box.min.y;
   for (const def of FAMILY) game.family.push(new Member(def, fig, baseH, game));
   installBuildSites();
+  game.family[0].obj.add(nightPhone);
   const outageObjectives = game.objectives.map((o) => ({ ...o }));
   game.prologueVisual = prologueScene(game, scene, cam);
   game.bubbles = createBubbles(game, { camera, renderer });
@@ -1050,17 +1124,27 @@ function installBuildSites() {
       card.appendChild(box);
     },
     aurora: (on, beat) => { game.auroraOn = on; game.prologueVisual.set(on, beat); },
-    cut() {
-      game.cutting = true;
-      const fade = document.createElement('div'); fade.id = 'outage-cut'; fade.textContent = '5:40 AM'; document.body.appendChild(fade);
-      requestAnimationFrame(() => fade.classList.add('black'));
-      setTimeout(() => {
-        game.log('Day 1. The power went out at 5:40 AM across the whole valley. The AC is silent.', 'warn');
-        game.log('Water still comes out of the taps, for now. Fill the bathtub.', 'warn');
-        fade.classList.remove('black'); game.cutting = false; ui.refresh();
-        setTimeout(() => fade.remove(), 1200);
-      }, 2200);
+    nightView(n) {
+      let fade = $('#outage-cut');
+      if (!fade && n.stage !== 'done') {
+        fade = document.createElement('div'); fade.id = 'outage-cut'; document.body.appendChild(fade);
+      }
+      if (fade) {
+        fade.textContent = n.card;
+        fade.classList.toggle('black', !!n.card);
+        fade.classList.toggle('night-clear', !n.card);
+        if (n.stage === 'done') fade.remove();
+      }
+      game.auroraOn = n.stage !== 'done' && n.elapsed < 21;
+      // Reuse the aurora curtain without the P14a shoulder/camera staging.
+      const sky = scene.children.find((o) => o.material?.uniforms?.time);
+      if (sky) sky.visible = game.auroraOn;
+      if (n.stage !== 'done') {
+        cam.target.set(n.stage === 'breaker' ? 33 : 28, 0, 13);
+        cam.zoom = n.stage === 'breaker' ? 1.6 : 1.25;
+      }
     },
+    cut() { ui.refresh(); },
   });
   for (const prop of map.prologueProps) {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(prop.key === 'desk' ? 1 : .4, prop.key === 'sprinkler' ? .18 : .7, .45), new THREE.MeshLambertMaterial({ color: prop.key === 'coffee' ? 0x353b3a : 0x8c806d }));
@@ -1082,7 +1166,8 @@ function begin(skip = false) {
   $('#intro').classList.add('hidden');
   $('#hud').classList.remove('hidden');
   started = true; last = performance.now();
-  if (skip) game.beats.outage(true); else game.beats.start();
+  if (skip) { game.beats.startNight(true); game.beats.skipNight(); }
+  else game.beats.start();
   ui.refresh();
 }
 $('#begin').addEventListener('click', () => begin());

@@ -62,7 +62,7 @@ await snap('start');
 await page.click('#speed button[data-s="4"]');
 let skipResult = null; let elenaCampSeen = false, choresSeen = false; const overlaps = new Set(); let sameCellSamples = 0;
 const t0 = Date.now();
-for (let i = 0; i < 60 && Date.now() - t0 < 9 * 60 * 1000; i++) {
+for (let i = 0; i < 180 && Date.now() - t0 < 20 * 60 * 1000; i++) {
   s = await st();
   if (s.trip.includes('theo') && (s.beat === 'p2' || s.beat === 'p3')) {
     if (!s.trip.includes('elena') || s.trip.includes('marcus')) throw new Error('Thursday camp driver must be Elena');
@@ -125,7 +125,6 @@ for (let i = 0; i < 60 && Date.now() - t0 < 9 * 60 * 1000; i++) {
     if (!acted) { note('  -> could not act on the Now target from the screen'); await snap(`stuck-${i}`); }
   }
   await page.waitForTimeout(acted_wait());
-  if (skipResult && i > 40) break;
 }
 function acted_wait() { return 4000; }
 
