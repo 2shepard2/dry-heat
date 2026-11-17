@@ -23,7 +23,17 @@ const $ = (s) => document.querySelector(s);
 const clamp = (v, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, v));
 
 // ---------------------------------------------------------------- renderer / scene
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+} catch (err) {
+  // No WebGL (hardware acceleration off, or the browser gave up on the GPU): say so instead of hanging on "Loading…".
+  $('#begin').textContent = 'Can’t start: 3D graphics are off';
+  $('#skip').classList.add('hidden');
+  $('#loading').textContent = 'This browser would not give the game WebGL. Turn on hardware acceleration '
+    + '(Chrome: Settings › System › "Use graphics acceleration when available"), fully quit and reopen the browser, then reload.';
+  throw err;
+}
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
