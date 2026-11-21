@@ -4,7 +4,7 @@ Gritty, grounded isometric survival sim. Phoenix-area suburb, July, the grid is 
 You keep a family of four alive: personal care, inventory, relationships, base building.
 No magic, no zombies.
 
-**Status: grey box (build 2). Our Game Off 2026 entry (theme SHIFT, due Dec 1): see `JAM.md`.** Tests the camera, heat/water/body sim, family control, and searching.
+**Our GitHub Game Off 2026 entry.** Two ordinary days, a solar storm, and then the power doesn't come back. Playable from the prologue through the blackout to an ending, in a desktop browser. Still being worked on through the jam (deadline Dec 1); see `JAM.md`.
 
 - Plain ES modules + Three.js r187 (vendored in `vendor/three`, MIT). No build step.
 - People are our own jointed low-poly figures built in code (`src/figure.js`), with idle/walk/run clips.
