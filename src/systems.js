@@ -360,6 +360,12 @@ export class SurvivalSystems {
       default: return [];
     }
   }
+  // The scripted trip spends fuel once and never advances survival time.
+  departureTrip() {
+    this.car.departureFuelL = this.car.fuelL;
+    this.car.garageOpen = true;
+    this.car.fuelL = Math.max(0, this.car.fuelL - 8);
+  }
   carMenu(lead) {
     return [...this.g.family.filter((m) => m.canAct() && !this.occupants().includes(m)).map((m) => ({ label: `Run AC for ${m.name}`, hint: 'walk to car · 2 seats · 2.5 L/hour', fn: () => this.enterCar(m), disabled: this.occupants().length >= 2 || this.car.fuelL <= 0 })),
       { label: 'Stop engine / everyone out', fn: () => this.stopCar(), disabled: !this.car.running },

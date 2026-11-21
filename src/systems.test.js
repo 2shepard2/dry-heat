@@ -1507,7 +1507,7 @@ test('current ending content renders without unresolved placeholders for all 16 
 });
 
 test('ending URL parser accepts held_out and valid unique comma-separated deaths only; jump seeds actual game state', () => {
-  for (const input of ['', '?ending=got_out', '?dead=jess', '?ending=unknown']) assert.equal(parseEndingJump(input), null);
+  for (const input of ['', '?dead=jess', '?ending=unknown']) assert.equal(parseEndingJump(input), null);
   assert.deepEqual(parseEndingJump('?ending=held_out'), { ending: 'held_out', dead: [] });
   const jump = parseEndingJump('?ending=held_out&dead=jess,theo,jess,walt');
   assert.deepEqual(jump, { ending: 'held_out', dead: ['jess', 'theo'] });
@@ -1520,3 +1520,350 @@ test('ending URL parser accepts held_out and valid unique comma-separated deaths
   assert.deepEqual(g.family[2].diedAt, { day: 10, min: 9 * 1440 + 23 * 60 });
   assert.ok(g.nightEvents.nextAt > g.sim.min);
 });
+
+// wave 5b-A
+const { DAYS } = await import('./data/days.js');
+const { DailyObjectives, installDailyObjectives, drinkingWater, dayCheck } = await import('./days.js');
+function dailyFixture() {
+  const f = fixture(), g = f.g;
+  g.objectives = [{ id: 'day-one', text: 'Yesterday', done: true }];
+  f.transitions = [];
+  g.objective = (id, state = 'done') => {
+    const o = g.objectives.find((o) => o.id === id);
+    if (o && !o.done && !o.failed) {
+      o[state] = true; f.transitions.push([id, state]);
+      if (state === 'done') g.log(`Done: ${o.text}.`, 'good');
+    }
+  };
+  f.days = new DailyObjectives(g);
+  return f;
+}
+
+test('daily objectives replace yesterday at 6 AM on every day 2-10, once, without carrying state', () => {
+  const { g, days, messages } = dailyFixture();
+  for (let day = 2; day <= 10; day++) {
+    const previous = g.objectives;
+    g.sim.min = (day - 1) * 1440 + 359.99;
+    days.update(); assert.equal(g.objectives, previous);
+    g.sim.min += .02; days.update();
+    assert.deepEqual(g.objectives.map((o) => o.id), DAYS[day].map((o) => o.id));
+    assert.notEqual(g.objectives[0], DAYS[day][0]);
+    assert.equal(g.objectives.some((o) => o.id === 'day-one'), false);
+    days.update(); assert.equal(messages.filter((s) => s === `Day ${day}.`).length, 1);
+    g.objectives[0].failed = true;
+  }
+  assert.equal(DAYS[10][0].failed, undefined);
+});
+
+test('daily content shrinks to one plain line, with no theme or leaving hint', () => {
+  assert.deepEqual(Object.values(DAYS).map((list) => list.length), [5, 5, 4, 3, 3, 3, 2, 2, 1]);
+  const all = Object.values(DAYS).flat();
+  assert.equal(new Set(all.map((o) => o.id)).size, all.length);
+  for (const o of all) assert.doesNotMatch(o.text, /shift|!/i);
+  for (const o of DAYS[6]) assert.doesNotMatch(o.text, /leave|fairgrounds|escape/i);
+  assert.deepEqual(DAYS[10], [{ id: 'd10-alive', text: 'Keep everyone alive.' }]);
+});
+
+test('water, shade and morning Walt checks tick through actual inventory and completed tasks', () => {
+  const { g, s, m, days, transitions, messages } = dailyFixture();
+  g.sim.min = 1440 + 360; days.update(); assert.equal(transitions.length, 0);
+  g.sim.tubL = 79.5; give(m, 'water_bottle'); days.update();
+  assert.equal(g.objectives.find((o) => o.check === 'waterAbove:80').done, true);
+  give(m, 'aluminum_foil'); assert.ok(g.shadeWindow(m, 'west-bedroom')); finish(m); days.update();
+  assert.equal(g.objectives.find((o) => o.check === 'shadeBuilt').done, true);
+  assert.ok(g.visitWalt(m, true)); finish(m); days.update();
+  assert.equal(g.objectives.find((o) => o.check === 'waltVisited').done, true);
+  const count = transitions.length; days.update(); assert.equal(transitions.length, count);
+  assert.equal(messages.filter((s) => s.startsWith('Done:')).length, 3);
+  assert.equal(g.objectives.find((o) => !o.check).done, undefined);
+});
+
+test('drinking water includes stored and carried containers, excludes unseen and non-water stock', () => {
+  const { g, m } = dailyFixture();
+  for (const o of g.map.objects) if (o.home) o.items = [];
+  for (const p of g.family) p.inv = [];
+  const home = g.map.objects.find((o) => o.home);
+  home.items = [makeEntry('water_bottle', 2), { ...makeEntry('bucket_5gal'), left: 5 }, { ...makeEntry('cooler'), left: 2 }];
+  home.unseen = [makeEntry('water_case')];
+  m.inv = [makeEntry('water_gallon'), makeEntry('milk_gallon'), makeEntry('orange_juice')];
+  g.sim.tubL = 10;
+  // Even an aliased entry cannot be counted twice.
+  m.inv.push(home.items[0]);
+  assert.equal(drinkingWater(g), 21.8);
+});
+
+test('solar construction removes Walt and circuit lines immediately and on later mornings', () => {
+  const { g, s, m, days } = dailyFixture();
+  g.sim.min = 2 * 1440 + 360; days.update();
+  assert.equal(g.objectives.filter((o) => ['waltVisited', 'solarBuilt'].includes(o.check)).length, 2);
+  assert.ok(g.visitWalt(m, true)); finish(m);
+  give(m, 'deep_cycle_battery'); assert.ok(g.buildCircuit(m)); finish(m); days.update();
+  assert.equal(s.solar.built, true);
+  assert.equal(g.objectives.some((o) => ['waltVisited', 'solarBuilt'].includes(o.check)), false);
+  g.sim.min = 3 * 1440 + 360; days.update(); assert.equal(g.objectives.length, 2);
+  g.sim.min = 4 * 1440 + 360; days.update(); assert.equal(g.objectives.length, 2);
+});
+
+test('nightfall completes through the objective path, death fails once, and daily checks do not tick early', () => {
+  const { g, days, transitions } = dailyFixture();
+  g.sim.min = 1440 + 360; days.update();
+  g.sim.min = 1440 + 1199.99; days.update();
+  assert.equal(g.objectives.find((o) => o.check === 'aliveAtNight').done, undefined);
+  g.sim.min += .02; days.update();
+  assert.equal(g.objectives.find((o) => o.check === 'aliveAtNight').done, true);
+  g.sim.min = 7 * 1440 + 360; g.family[2].dead = true; days.update();
+  assert.equal(g.objectives.find((o) => o.check === 'aliveAtNight').failed, true);
+  days.update(); assert.equal(transitions.filter(([, state]) => state === 'failed').length, 1);
+});
+
+test('Walt and treatment checks reject yesterday, and radio uses the heard set', () => {
+  const { g, s } = dailyFixture(); g.sim.min = 2 * 1440 + 360;
+  s.walt.lastVisit = 1440 + 400; assert.equal(dayCheck(g, 'waltVisited', 3), false);
+  s.walt.lastVisit = 2 * 1440 + 700; assert.equal(dayCheck(g, 'waltVisited', 3), false);
+  s.walt.lastVisit = 2 * 1440 + 400; assert.equal(dayCheck(g, 'waltVisited', 3), true);
+  s.solar.treatedDay = 2; assert.equal(dayCheck(g, 'nebulizer', 3), false);
+  s.solar.treatedDay = 3; assert.equal(dayCheck(g, 'nebulizer', 3), true);
+  assert.equal(dayCheck(g, 'heardRadio:fairgrounds-camp', 3), false);
+  s.heard.add('fairgrounds-camp'); assert.equal(dayCheck(g, 'heardRadio:fairgrounds-camp', 3), true);
+});
+
+test('daily updater preserves prologue/day 1, stops at departure/endings, and clears at day 11 dawn', () => {
+  const { g, days, messages } = dailyFixture(); const original = g.objectives;
+  g.sim.phase = 'prologue'; g.sim.min = 1440 + 360; days.update(); assert.equal(g.objectives, original);
+  g.sim.phase = 'outage'; g.sim.min = 360; days.update(); assert.equal(g.objectives, original);
+  g.departed = true; g.sim.min = 1440 + 360; days.update(); assert.equal(g.objectives, original);
+  g.departed = false; g.ending = { kind: 'held_out' }; days.update(); assert.equal(g.objectives, original);
+  delete g.ending; g.sim.min = 9 * 1440 + 360; days.update();
+  g.sim.min = 10 * 1440 + 359; days.update(); assert.equal(g.objectives.length, 1);
+  g.sim.min++; days.update(); assert.deepEqual(g.objectives, []);
+  assert.equal(messages.includes('Day 11.'), false);
+});
+
+test('single boot hook updates through the real Prologue and resets at the day-1 hand-off', () => {
+  const { g, b } = prologue(); const days = installDailyObjectives(g);
+  assert.equal(installDailyObjectives(g), days);
+  b.outage(true); assert.equal(days.day, 1);
+  g.sim.min = 1440 + 360; g.beats.update(0, 0);
+  assert.deepEqual(g.objectives.map((o) => o.id), DAYS[2].map((o) => o.id));
+});
+
+// wave 5b-B
+const { departureVia, departurePressure, walkingTime, DEPARTURE_SECONDS } = await import('./endings.js');
+function departureFixture() {
+  const f = fixture();
+  f.g.sim.min = 5 * 1440 + 12 * 60;
+  f.g.sim.tubL = 100;
+  f.g.map.objects.find((o) => o.home && o.ch === 'S' && o.x === 35).questStock = true;
+  give(f.g.family[0], 'inhaler_spare');
+  f.g.nightEvents = new NightEvents(f.g);
+  f.engine = new EndingEngine(f.g);
+  return f;
+}
+
+test('5b-B each pressure opens only after the fairgrounds broadcast, once, on an hourly check', () => {
+  for (const pressure of ['water', 'inhaler', 'thief-watched', 'thief-unwatched']) {
+    const { g, engine, messages } = departureFixture();
+    const speech = []; g.bubbles = { say: (...args) => speech.push(args) };
+    if (pressure === 'water') g.sim.tubL = 11.99;
+    if (pressure === 'inhaler') g.family[0].inv = [];
+    if (pressure.startsWith('thief')) g.nightEvents.trigger('tub-thief', pressure === 'thief-watched');
+    assert.equal(departurePressure(g), true, pressure);
+    engine.check(); assert.equal(g.leaveOpen, undefined);
+    g.systems.heard.add('fairgrounds-camp');
+    engine.check(); assert.equal(g.leaveOpen, undefined, 'waits for next hourly check');
+    g.sim.min += 60; engine.check(); assert.equal(g.leaveOpen, true, pressure);
+    g.sim.min += 60; engine.check();
+    assert.equal(messages.filter((m) => m.includes("We can't stay here.")).length, 1);
+    assert.deepEqual(speech, [['elena', "The radio said the fairgrounds. We can't stay here."]]);
+  }
+});
+
+test('5b-B water includes stored and carried clean containers; inhaler includes unseen stock and any carrier', () => {
+  const { g, engine } = departureFixture();
+  g.systems.heard.add('fairgrounds-camp');
+  const cabinet = g.map.objects.find((o) => o.home && o.ch === 'T');
+  cabinet.items.push(makeEntry('water_gallon_half'));
+  g.sim.tubL = 12 - cabinet.items[0].left;
+  engine.check(); assert.equal(g.leaveOpen, undefined, 'exactly 12 L is not below 12');
+  cabinet.items[0].left -= .01;
+  const shelf = g.map.objects.find((o) => o.home && o.ch === 'S' && o.x === 35);
+  shelf.questStock = false; assert.equal(departurePressure(g), false, 'unsearched guaranteed jugs still count');
+  shelf.questStock = true; g.sim.min += 60; engine.check(); assert.equal(g.leaveOpen, true);
+  g.leaveOpen = false; g.sim.tubL = 100; g.family[0].inv = [];
+  cabinet.items = []; cabinet.unseen = [makeEntry('inhaler_spare')];
+  assert.equal(departurePressure(g), false);
+  g.family[3].inv.push(cabinet.unseen.pop()); assert.equal(departurePressure(g), false);
+  g.family[3].inv = []; assert.equal(departurePressure(g), true);
+  g.systems.solar.built = true; assert.equal(departurePressure(g), false);
+  g.systems.solar.built = false; g.family[3].die(''); assert.equal(departurePressure(g), false);
+});
+
+test('5b-B radio/day/phase gates and early tub theft do not open departure', () => {
+  const { g, engine } = departureFixture();
+  g.systems.heard.add('fairgrounds-camp');
+  g.sim.min = 2 * 1440 + 23 * 60; g.nightEvents.trigger('tub-thief', true);
+  assert.equal(g.tubThiefDay, 3);
+  g.sim.min = 5 * 1440 + 12 * 60; engine.check(); assert.equal(g.leaveOpen, undefined);
+  g.sim.tubL = 0;
+  for (const min of [4 * 1440 + 1200, 5 * 1440 + 660]) {
+    g.sim.min = min; engine.check(); assert.equal(g.leaveOpen, undefined);
+  }
+  g.sim.phase = 'prologue'; g.sim.min = 5 * 1440 + 720; engine.check(); assert.equal(g.leaveOpen, undefined);
+  g.sim.phase = 'outage'; engine.check(); assert.equal(g.leaveOpen, true);
+});
+
+test('5b-B eight-liter drive boundary and night walking window; daytime departure arms and can cancel', () => {
+  const { g, engine } = departureFixture(); g.leaveOpen = true;
+  for (const [liters, via] of [[7.999, 'walk'], [8, 'drive'], [20, 'drive']]) {
+    g.systems.car.fuelL = liters; assert.equal(departureVia(g), via);
+  }
+  g.systems.car.fuelL = 4;
+  for (const [hour, allowed] of [[0, true], [3.999, true], [4, false], [19.999, false], [20, true], [23, true]]) {
+    g.sim.min = 5 * 1440 + hour * 60; assert.equal(walkingTime(g), allowed);
+  }
+  g.sim.min = 5 * 1440 + 19 * 60;
+  assert.equal(engine.chooseDeparture(), 'armed'); assert.equal(g.departed, undefined);
+  engine.cancelDeparture(); g.sim.min += 60; engine.check(); assert.equal(g.departed, undefined);
+  g.sim.min -= 60; engine.chooseDeparture(); g.sim.min += 59.99; engine.check(); assert.equal(g.departed, undefined);
+  g.sim.min += .01; engine.check(); assert.equal(g.departed, true);
+  assert.deepEqual(g.ending, { kind: 'got_out', day: 8, min: 5 * 1440 + 1200, via: 'walk' });
+});
+
+test('5b-B driving goes immediately in daylight; away survivors must return before departure', () => {
+  const { g, engine } = departureFixture(); g.leaveOpen = true; g.systems.car.fuelL = 8;
+  g.family[1].away = true; assert.equal(engine.chooseDeparture(), false);
+  assert.equal(g.departed, undefined); g.family[1].away = false;
+  assert.equal(engine.chooseDeparture(), true); assert.equal(g.systems.car.fuelL, 0);
+  assert.equal(g.ending.day, 6); assert.equal(g.ending.via, 'drive');
+});
+
+test('5b-B watched and skipped departures converge, keep every survivor and carried inventory, freeze all clocks', () => {
+  for (const via of ['drive', 'walk']) for (const loss of [[], ['jess'], ['theo', 'marcus'], ['marcus', 'elena', 'theo']]) {
+    const results = [];
+    for (const skipAt of [null, 0, 6, 11, 22, 29]) {
+      const { g, messages } = departureFixture();
+      for (const id of loss) g.family.find((m) => m.id === id).die('');
+      const alive = g.family.filter((m) => !m.dead);
+      give(alive[0], 'water_gallon_half', 'can_opener');
+      alive[0].needs.health = .001; alive[0].collapsed = true; alive[0].bodyT = 106;
+      const stock = g.map.objects.find((o) => o.home && o.ch === 'K'); give({ inv: stock.items }, 'water_case');
+      const house = JSON.stringify(g.map.objects.map((o) => o.items));
+      g.leaveOpen = true; g.systems.car.fuelL = via === 'drive' ? 12 : 4;
+      g.sim.min = 5 * 1440 + 1200;
+      const min = g.sim.min, needs = g.family.map((m) => ({ ...m.needs }));
+      const nextEvent = g.nightEvents.nextAt;
+      const expectedPack = Object.fromEntries(alive.map((m) => [m.id, m.inv.map((e) => ({ ...e }))]));
+      let cards = 0; const views = [];
+      const engine = new EndingEngine(g, { cards: () => cards++, view: (v) => views.push(v) });
+      assert.equal(engine.chooseDeparture(), true);
+      assert.deepEqual(g.departedWith, expectedPack);
+      assert.notEqual(g.departedWith[alive[0].id], alive[0].inv);
+      if (skipAt === null) for (let i = 0; i <= DEPARTURE_SECONDS * 10; i++) {
+        g.family.forEach((m) => m.update(0, .1)); engine.update(.1);
+      } else { engine.update(skipAt); engine.skip(); }
+      assert.equal(cards, 1); assert.equal(g.over, true); assert.equal(g.sim.speed, 0);
+      assert.equal(g.sim.min, min); assert.equal(g.nightEvents.nextAt, nextEvent);
+      assert.equal(g.nightEvents.used.size, 0); assert.deepEqual(g.family.map((m) => ({ ...m.needs })), needs);
+      assert.deepEqual(g.family.filter((m) => m.dead).map((m) => m.id), loss.slice().sort((a, b) => g.family.findIndex((m) => m.id === a) - g.family.findIndex((m) => m.id === b)));
+      assert.equal(JSON.stringify(g.map.objects.map((o) => o.items)), house);
+      assert.equal(views.at(-1).done, true);
+      assert.equal(messages.filter((m) => m.includes('locks the door.')).length, 1);
+      assert.equal(messages.some((m) => m.includes('Out of habit.')), !loss.includes('marcus'));
+      assert.equal(messages.filter((m) => m.includes('needle sits')).length, via === 'drive' ? 1 : 0);
+      if (via === 'drive') {
+        const child = alive.find((m) => m.id === 'theo') || [...alive].sort((a, b) => a.age - b.age)[0];
+        assert.ok(messages.some((m) => m.includes(`at ${child.name}, and waves them through.`)));
+      } else assert.ok(messages.includes('They take the canal path. Nobody talks.'));
+      g.sim.min = CONVOY_MIN; assert.equal(engine.check(), false);
+      results.push({ ending: g.ending, pack: g.departedWith, dead: g.family.map((m) => m.dead),
+        positions: g.family.map((m) => m.pos.toArray()), fuel: g.systems.car.fuelL, messages });
+    }
+    results.slice(1).forEach((result) => assert.deepEqual(result, results[0]));
+  }
+});
+
+test('5b-B departure independently blocks held out even without a reached ending object', () => {
+  const { g, engine } = departureFixture(); g.departed = true; g.sim.min = CONVOY_MIN;
+  assert.equal(engine.check(), false); assert.equal(g.ending, undefined);
+});
+
+test('5b-B got-out jumps seed both routes, default walk, known deaths and safe future event slots', () => {
+  assert.deepEqual(parseEndingJump('?ending=got_out'), { ending: 'got_out', via: 'walk', dead: [] });
+  assert.equal(parseEndingJump('?ending=got_out&via=boat').via, 'walk');
+  for (const via of ['drive', 'walk']) {
+    const jump = parseEndingJump(`?ending=got_out&via=${via}&dead=jess,jess,walt`);
+    assert.deepEqual(jump, { ending: 'got_out', via, dead: ['jess'] });
+    const { g } = prologue(); g.nightEvents = new NightEvents(g);
+    applyEndingJump(g, jump);
+    assert.equal(g.sim.day, 6); assert.equal(g.sim.hour, 19); assert.equal(g.sim.phase, 'outage');
+    assert.equal(g.systems.heard.has('fairgrounds-camp'), true); assert.equal(g.leaveOpen, true);
+    assert.equal(g.systems.car.fuelL, via === 'drive' ? 20 : 4);
+    assert.equal(g.family[2].dead, true); assert.equal(g.nightEvents.nextAt > g.sim.min, true);
+    assert.equal(g.departed, undefined);
+  }
+});
+
+test('5b-B card selection covers drive, whole-family walk, loss on walk, Marcus dead and both parents dead', () => {
+  for (const [via, dead, present, absent] of [
+    ['drive', [], ['go-drive', 'go-key'], ['go-walk', 'go-walk-loss', 'go-key-elena']],
+    ['walk', [], ['go-walk', 'go-key'], ['go-drive', 'go-walk-loss', 'go-key-elena']],
+    ['walk', ['jess'], ['go-walk-loss', 'go-key'], ['go-walk', 'go-key-elena']],
+    ['walk', ['marcus'], ['go-walk-loss', 'go-key-elena'], ['go-walk', 'go-key']],
+    ['drive', ['marcus', 'elena'], ['go-drive'], ['go-key', 'go-key-elena']]]) {
+    const { g } = fixture(); dead.forEach((id) => g.family.find((m) => m.id === id).die(''));
+    g.ending = { kind: 'got_out', day: 8, min: 5 * 1440 + 1200, via };
+    const cards = buildEnding(g, ENDINGS), ids = cards.map((c) => c.id);
+    present.forEach((id) => assert.ok(ids.includes(id), id)); absent.forEach((id) => assert.ok(!ids.includes(id), id));
+    assert.equal(cards.at(-1).title, true); cards.forEach((c) => assert.ok(!c.text.includes('{')));
+  }
+});
+test('5b-B production confirmation offers Go tonight, cancels armed walks, pauses, and starts either route', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8');
+  const code = source.slice(source.indexOf('function showDepartureConfirm()'), source.indexOf('function createDepartureView()'));
+  for (const [fuel, hour, label] of [[4, 19, 'Go tonight'], [4, 20, 'Go'], [8, 12, 'Go']]) {
+    const { g, engine } = departureFixture(); g.leaveOpen = true; g.endings = engine;
+    g.systems.car.fuelL = fuel; g.sim.min = 5 * 1440 + hour * 60;
+    const element = () => ({ children: [], setAttribute() {}, appendChild(e) { this.children.push(e); }, remove() { this.removed = true; } });
+    const document = { body: element(), createElement: element };
+    const show = new Function('game', 'document', 'departureVia', 'walkingTime', code + '; return showDepartureConfirm;')(g, document, departureVia, walkingTime);
+    g.departureArmed = true; show();
+    let panel = document.body.children.at(-1), contents = panel.children[0].children;
+    assert.equal(g.departureArmed, false); assert.equal(g.cutting, true);
+    assert.equal(contents[0].textContent, fuel >= 8 ? `Drive. The tank has ${fuel} liters.` : 'Walk, after dark. It is eleven miles.');
+    assert.equal(contents[1].textContent, 'What they can carry goes with them. The rest stays.');
+    assert.equal(contents[2].textContent, label); assert.equal(contents[3].textContent, 'Not yet');
+    contents[3].onclick({ stopPropagation() {} });
+    assert.equal(panel.removed, true); assert.equal(g.cutting, false); assert.equal(g.departed, undefined);
+    show(); panel = document.body.children.at(-1); contents = panel.children[0].children;
+    contents[2].onclick({ stopPropagation() {} }); assert.equal(panel.removed, true);
+    if (hour === 19) { assert.equal(g.departureArmed, true); assert.equal(g.departed, undefined); }
+    else { assert.equal(g.departed, true); assert.equal(g.ending.via, fuel >= 8 ? 'drive' : 'walk'); }
+  }
+});
+
+test('5b-B production scene view drives the existing car beyond the nearest edge or walks survivors off block', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8');
+  const code = source.slice(source.indexOf('function createDepartureView()'), source.indexOf('// Held-out presentation'));
+  const { FRONT_DOOR } = await import('./endings.js');
+  for (const via of ['drive', 'walk']) {
+    const { g } = departureFixture(); const cam = { target: new THREE.Vector3() };
+    const elements = [];
+    const document = { createElement: () => ({ style: {} }), body: { appendChild: (e) => elements.push(e) } };
+    g.systems.car.mesh = new THREE.Object3D();
+    const view = new Function('game', 'THREE', 'scene', 'makeFigure', 'cam', 'map', 'FRONT_DOOR', 'document', '$', code + '; return createDepartureView();')(
+      g, THREE, g.scene, makeFigure, cam, g.map, FRONT_DOOR, document, () => elements.at(-1));
+    for (const elapsed of [0, 7, 11, 14, 20, 27, 30]) view({ elapsed, via });
+    if (via === 'drive') {
+      const car = g.systems.car;
+      assert.ok(car.x + car.w / 2 + car.mesh.position.x > g.map.W);
+      assert.equal(g.family.every((m) => !m.obj.visible), true);
+    } else {
+      assert.ok(g.family.every((m) => m.pos.x > g.map.W));
+      assert.ok(g.family[0].pos.distanceTo(g.family[3].pos) < 1, 'Theo stays close to a parent');
+    }
+    assert.equal(elements.at(-1).style.opacity, '1');
+  }
+});
+// end wave 5b-B

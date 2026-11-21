@@ -43,7 +43,10 @@ export class UI {
       const b = e.target.closest('button');
       if (b) game.setSpeed(Number(b.dataset.s));
     });
-    $('#house').addEventListener('click', () => { this.houseOpen = !this.houseOpen; this.refresh(); });
+    $('#house').addEventListener('click', (e) => {
+      if (e.target.closest('.leave')) { game.showDepartureConfirm?.(); return; }
+      this.houseOpen = !this.houseOpen; this.refresh();
+    });
     $('#objectives').addEventListener('click', (e) => {
       if (e.target.closest('.done-toggle')) { this.doneOpen = !this.doneOpen; this.refresh(); }
       else if (e.target.closest('.skip-ahead')) game.beats?.skipAhead();
@@ -120,7 +123,8 @@ export class UI {
           (water !== 'running' ? `<div class="${water === 'dead' ? 'bad' : 'warn'}">Taps: ${water}</div>` : '') +
           `<div>Car: ${g.systems.car.fuelL.toFixed(1)} L${g.systems.car.running ? ' · AC on' : ''}</div>` +
           `<div>Window shade: ${Math.min(3, g.systems.shades.size)}/3 effective</div>` +
-          `<div>Solar: ${Math.round(g.systems.watts())} W${g.systems.solar.fan ? ' · fan placed' : ''}</div></div>` : ''));
+          `<div>Solar: ${Math.round(g.systems.watts())} W${g.systems.solar.fan ? ' · fan placed' : ''}</div>` +
+          (g.leaveOpen && !g.departed ? `<button class="leave">${g.departureArmed ? 'Leaving tonight (change)' : 'Leave for the fairgrounds…'}</button>` : '') + '</div>' : ''));
     }
 
     // task panel: Now, <=2 Also, <=4 open, finished ones behind a toggle. The list shows from the first frame of every phase.

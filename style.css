@@ -125,6 +125,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 #hud > #house { top: 10px; left: 224px; background: none; border: 0; width: 190px; }
 #house .chip { width: 100%; text-align: left; font-size: 11px; background: var(--panel); padding: 4px 8px; }
 #house .chip-body { margin-top: 3px; background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px; font-size: 11px; color: var(--dim); display: flex; flex-direction: column; gap: 2px; }
+#house .leave { margin-top: 4px; padding: 4px 6px; font-size: 11px; color: var(--text); background: transparent; border: 1px solid var(--warn); border-radius: 4px; text-align: left; cursor: pointer; }
 #family { top: auto; bottom: 10px; left: 10px; width: auto; display: flex; gap: 5px; padding: 5px; overflow: visible; max-height: none; }
 .card { display: grid; grid-template-columns: 25px 1fr; gap: 2px 5px; width: 123px; margin: 0; padding: 5px; text-align: left; }
 .portrait { grid-row: span 2; width: 25px; height: 32px; border-radius: 45% 45% 5px 5px; background: var(--person); display: grid; place-items: center; font-size: 17px; color: #fff; }
@@ -162,3 +163,8 @@ button:disabled { opacity: 0.45; cursor: default; }
 #ending-cards button { font: 16px Georgia, serif; padding: .7em 1.4em; border: 1px solid #777168; color: #eee8dc; background: transparent; cursor: pointer; }
 #ending-cards .ending-next { margin-top: 1rem; }
 @keyframes ending-card-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* wave 5b-B: departure confirmation shares the outage choice panel. */
+#departure-confirm { position: fixed; inset: 0; z-index: 110; display: grid; place-items: center; background: #0009; }
+#departure-confirm .box { max-width: 32rem; padding: 2rem; color: #e9e2d0; background: #171a1c; border: 1px solid #6e7169; }
+#departure-confirm button { margin: .6rem .8rem 0 0; }

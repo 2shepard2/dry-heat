@@ -557,6 +557,7 @@ export class Prologue {
       Object.assign(m.needs, { energy: Math.max(m.needs.energy, 80), food: Math.max(m.needs.food, 70), hydration: Math.max(m.needs.hydration, 95) }); }
     g.sim.phase = 'outage'; g.sim.min = POWER_OUT_MIN; g.sim.indoor = 81;
     g.objectives = this.outageObjectives.map((o) => ({ ...o }));
+    g.days?.reset();
     applyDecisions(g);
     // Both routes wake in the same places, with Theo frightened on the front step.
     const theo = g.family.find((m) => m.id === 'theo');

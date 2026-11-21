@@ -32,7 +32,7 @@ export const ENDINGS = [
   { id: 'go-title', ending: 'got_out', title: true, text: 'They got out.' },
 
   { id: 'go-drive', ending: 'got_out', order: 10, when: { via: 'drive' }, text: 'The needle was on E for the last four miles. Nobody said anything about it, and nobody looked away from it either.' },
-  { id: 'go-walk', ending: 'got_out', order: 10, when: { via: 'walk' }, text: 'They walked eleven miles in two nights and slept under an overpass in between. Marcus and Elena carried Theo in turns, and then Jess did.' },
+  { id: 'go-walk', ending: 'got_out', order: 10, when: { via: 'walk', noneDead: true }, text: 'They walked eleven miles in two nights and slept under an overpass in between. Marcus and Elena carried Theo in turns, and then Jess did.' },
   { id: 'go-walk-loss', ending: 'got_out', order: 10, text: 'They reached the fairgrounds on the second night.' },
 
   { id: 'go-camp', ending: 'got_out', order: 20, text: 'At the gate a woman with a clipboard put a paper band on each of their wrists. "You\'re 4,112," she said, and moved to the next family.' },
@@ -42,7 +42,8 @@ export const ENDINGS = [
   { id: 'go-left-behind-loss', ending: 'got_out', order: 50, when: { anyDead: true }, text: 'They left {dead} at the house. There was no other way, and they will never stop knowing it.' },
   { id: 'go-left-behind', ending: 'got_out', order: 50, text: 'Everything they owned that would not fit in a backpack is still in the house on that street. Some of it may still be there.' },
 
-  { id: 'go-key', ending: 'got_out', order: 90, text: 'Marcus still has the house key. He has never said why he keeps it.' },
+  { id: 'go-key', ending: 'got_out', order: 90, when: { alive: 'marcus' }, text: 'Marcus still has the house key. He has never said why he keeps it.' },
+  { id: 'go-key-elena', ending: 'got_out', order: 90, when: { dead: 'marcus', alive: 'elena' }, text: 'Elena still has the house key. She has never said why she keeps it.' },
 
   // ---- Total loss: the one failure ending ----
   { id: 'lost-title', ending: 'all_lost', title: true, text: 'Nobody is left in the house on this street.' },

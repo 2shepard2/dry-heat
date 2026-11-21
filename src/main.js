@@ -5,10 +5,11 @@ import { buildMap, T } from './map.js';
 import { buildWorld } from './build.js';
 import { Sim } from './sim.js';
 import { Prologue } from './beats.js';
+import { installDailyObjectives } from './days.js';
 import { prologueScene } from './prologue-scene.js';
 import { createBubbles } from './bubbles.js';
 import { NightEvents } from './events.js';
-import { EndingEngine, buildEnding, installEndingTracking, syncKindness, parseEndingJump, applyEndingJump, CONVOY_MIN } from './endings.js';
+import { EndingEngine, buildEnding, installEndingTracking, syncKindness, parseEndingJump, applyEndingJump, CONVOY_MIN, departureVia, walkingTime, FRONT_DOOR } from './endings.js';
 import { ENDINGS } from './data/endings.js';
 import { SurvivalSystems } from './systems.js';
 import { Member, FAMILY } from './family.js';
@@ -730,8 +731,12 @@ function commandMove(x, y) {
 function objectMenu(o, cx, cy) {
   const group = game.selected.filter((m) => m.canAct() && !m.away);
   const lead = group[0];
-  if (!lead) { game.log('Pick someone first: click a family member or their card.', 'warn'); return; }
   const items = [];
+  if (o.departureDoor) {
+    if (game.leaveOpen && !game.departed) items.push({ label: 'Leave for the fairgrounds', fn: showDepartureConfirm });
+    ui.menu(cx, cy, items, 'Front door'); return;
+  }
+  if (!lead) { game.log('Pick someone first: click a family member or their card.', 'warn'); return; }
   if (sim.phase === 'prologue') {
     const d = game.beats.current?.do;
     const target = o.beatTargets?.find((t) => t === d?.target) || (o.car && ['trip', 'together'].includes(d?.type) ? d.target : null);
@@ -965,7 +970,10 @@ function frame(now) {
     keys.clear(); ui.hideMenu();
     // Real-time walking/animation only; no body, clock, chores or event update.
     const speed = sim.speed; sim.speed = 1;
-    for (const m of game.family) m.update(0, dtReal);
+    for (const m of game.family) {
+      if (game.endings.scene.departure) m.mixer.update(dtReal);
+      else m.update(0, dtReal);
+    }
     sim.speed = speed;
     game.endings.update(dtReal);
   } else if (started && !game.over && game.beats.night) {
@@ -975,6 +983,7 @@ function frame(now) {
     game.beats.updateSkipping();
     let dtMin = game.beats.limitStep(dtReal * (game.beats.paused || game.cutting ? 0 : sim.speed)); // 1 real second = 1 game minute at 1x
     if (sim.phase === 'outage' && sim.min < CONVOY_MIN && !game.departed) dtMin = Math.min(dtMin, CONVOY_MIN - sim.min);
+    if (game.departureArmed && sim.hour < 20 && sim.hour >= 4) dtMin = Math.min(dtMin, Math.floor(sim.min / 1440) * 1440 + 1200 - sim.min);
     // sub-step the body sim at high speed so thresholds aren't skipped
     const steps = Math.max(1, Math.ceil(dtMin / 2));
     for (let s = 0; s < steps && !game.over && !game.endings.scene; s++) {
@@ -982,7 +991,7 @@ function frame(now) {
       game.updateLights(dtMin / steps);
       if (sim.phase === 'outage') game.systems.update(dtMin / steps);
       for (const m of game.family) m.update(dtMin / steps, dtReal / steps);
-      if (!game.over && sim.phase === 'outage' && sim.min >= CONVOY_MIN) game.endings.check();
+      if (!game.over && sim.phase === 'outage') game.endings.check();
       if (!game.over && !game.endings.scene && dtMin > 0 && sim.phase === 'outage') game.nightEvents.update();
     }
     if (!game.over && !game.endings.scene) game.beats.update(dtMin, dtReal);
@@ -1120,6 +1129,74 @@ function installBuildSites() {
   };
 }
 
+// The front door is an ordinary world menu; the confirmation uses the outage choice style.
+function showDepartureConfirm() {
+  game.endings.cancelDeparture();
+  const panel = document.createElement('div'); panel.id = 'departure-confirm';
+  panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-modal', 'true'); panel.setAttribute('aria-label', 'Leave for the fairgrounds');
+  const box = document.createElement('div'); box.className = 'box'; panel.appendChild(box);
+  const via = departureVia(game);
+  for (const line of [via === 'drive' ? `Drive. The tank has ${Math.floor(game.systems.car.fuelL)} liters.` : 'Walk, after dark. It is eleven miles.',
+    'What they can carry goes with them. The rest stays.']) {
+    const p = document.createElement('p'); p.textContent = line; box.appendChild(p);
+  }
+  game.cutting = true;
+  const close = () => { panel.remove(); game.cutting = false; };
+  for (const [label, go] of [[via === 'walk' && !walkingTime(game) ? 'Go tonight' : 'Go', true], ['Not yet', false]]) {
+    const button = document.createElement('button'); button.textContent = label;
+    button.disabled = go && game.family.some((m) => !m.dead && m.away);
+    if (button.disabled) button.title = 'Wait for everyone to return.';
+    button.onclick = (e) => { e.stopPropagation(); close(); if (go) game.endings.chooseDeparture(); };
+    box.appendChild(button);
+  }
+  document.body.appendChild(panel);
+}
+function createDepartureView() {
+  const root = new THREE.Group(); scene.add(root); root.visible = false;
+  const neighbors = [0x8b826b, 0x737c91].map((color, i) => {
+    const fig = makeFigure().scene;
+    fig.traverse((m) => { if (m.isMesh && m.material.name !== 'Skin') { m.material = m.material.clone(); m.material.color.setHex(color); } });
+    fig.position.set(i ? 41.5 : 18.5, 0, 16.5); root.add(fig); return fig;
+  });
+  return ({ elapsed: t, via }) => {
+    root.visible = true;
+    neighbors.forEach((fig) => { fig.visible = t >= 7; });
+    const alive = game.family.filter((m) => !m.dead);
+    const car = game.systems.car;
+    const progress = Math.min(1, Math.max(0, (t - 14) / 12));
+    if (via === 'drive') {
+      // The existing car geometry is in world coordinates; translate it onto the road, then to the nearest edge.
+      car.mesh.position.set(progress * (map.W + 4 - (car.x + car.w / 2)), 0, Math.min(1, progress * 4) * 4);
+      alive.forEach((m, i) => {
+        m.obj.visible = t < 14;
+        if (t >= 10 && t < 14) {
+          const p = Math.min(1, (t - 10) / 4);
+          m.play('walk'); m.yaw = Math.PI / 2; m.obj.rotation.y = m.yaw;
+          m.pos.set(FRONT_DOOR.x + (car.x + 1 - FRONT_DOOR.x) * p + i * .3, 0, FRONT_DOOR.z);
+        }
+      });
+      cam.target.set(32 + progress * 25, 0, 20); cam.zoom = 1;
+    } else {
+      const child = alive.find((m) => m.id === 'theo') || [...alive].sort((a, b) => a.age - b.age)[0];
+      const parent = alive.find((m) => ['marcus', 'elena'].includes(m.id) && m !== child);
+      alive.forEach((m, i) => {
+        if (t < 12) return;
+        const p = Math.min(1, (t - 12) / 14);
+        const index = m === child && parent ? alive.indexOf(parent) + .35 : i;
+        m.play('walk'); m.yaw = Math.PI / 2; m.obj.rotation.y = m.yaw;
+        m.pos.set(FRONT_DOOR.x + p * (map.W + 3 - FRONT_DOOR.x) - index * .55, 0,
+          FRONT_DOOR.z + Math.min(1, p * 5) * 4 + index * .25);
+      });
+      cam.target.set(29 + progress * 28, 0, 20); cam.zoom = 1.1;
+    }
+    if (t >= 27) {
+      let fade = $('#ending-fade');
+      if (!fade) { fade = document.createElement('div'); fade.id = 'ending-fade'; document.body.appendChild(fade); }
+      fade.style.opacity = String(Math.min(1, (t - 27) / 3));
+    }
+  };
+}
+
 // Held-out presentation is driven only by the engine's real-time view state.
 function createHeldOutView() {
   const root = new THREE.Group(); scene.add(root); root.visible = false;
@@ -1185,7 +1262,7 @@ function showEndingCards() {
     if (final) {
       const day = document.createElement('p'); day.className = 'ending-day'; day.textContent = `Day ${game.ending.day}`; overlay.appendChild(day);
       const restart = document.createElement('button'); restart.textContent = 'Restart';
-      restart.onclick = (e) => { e.stopPropagation(); const url = new URL(location.href); url.searchParams.delete('ending'); url.searchParams.delete('dead'); location.href = url.href; };
+      restart.onclick = (e) => { e.stopPropagation(); const url = new URL(location.href); url.searchParams.delete('ending'); url.searchParams.delete('dead'); url.searchParams.delete('via'); location.href = url.href; };
       overlay.appendChild(restart);
     } else {
       const next = document.createElement('button'); next.className = 'ending-next'; next.textContent = 'Continue'; next.onclick = (e) => { e.stopPropagation(); index++; draw(); }; overlay.appendChild(next);
@@ -1251,10 +1328,16 @@ function showEndingCards() {
     mesh.position.set(prop.x + .5, .35, prop.y + .5); mesh.userData.obj = prop;
     scene.add(mesh); world.pickables.push(mesh);
   }
+  installDailyObjectives(game); // wave 5b-A
   installEndingTracking(game);
-  const heldView = createHeldOutView();
-  game.endings = new EndingEngine(game, { view: heldView, cards: showEndingCards });
+  const heldView = createHeldOutView(), departureView = createDepartureView();
   game.nightEvents = new NightEvents(game);
+  game.endings = new EndingEngine(game, { view: (state) => state.departure ? departureView(state) : heldView(state), cards: showEndingCards });
+  const door = new THREE.Mesh(new THREE.BoxGeometry(.9, 1.8, .12), new THREE.MeshLambertMaterial({ color: 0x79624b }));
+  door.position.set(FRONT_DOOR.x, .9, FRONT_DOOR.z - 1);
+  door.userData.obj = { departureDoor: true, name: 'Front door' };
+  game.showDepartureConfirm = showDepartureConfirm;
+  scene.add(door); world.pickables.push(door);
   game.nightEvent = (id, watched) => game.nightEvents.trigger(id, watched);
   game.selected = [game.family[0]];
   placeCamera();
